@@ -9,6 +9,7 @@ with automatic configuration download.
 
 import argparse
 import configparser
+import math
 import socket
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,9 +30,144 @@ from config_manager import (
     load_config,
     get_default_provider,
     should_auto_download,
-    get_config_directory
+    get_config_directory,
+    is_privacy_scoring_enabled,
+    get_privacy_weight,
+    get_privacy_scores
 )
 from vpn_config_downloader import download_vpn_configs
+
+
+# Country code to country name mapping
+COUNTRY_NAMES = {
+    'AD': 'Andorra',
+    'AE': 'United Arab Emirates',
+    'AL': 'Albania',
+    'AM': 'Armenia',
+    'AR': 'Argentina',
+    'AT': 'Austria',
+    'AU': 'Australia',
+    'AZ': 'Azerbaijan',
+    'BA': 'Bosnia and Herzegovina',
+    'BD': 'Bangladesh',
+    'BE': 'Belgium',
+    'BG': 'Bulgaria',
+    'BM': 'Bermuda',
+    'BN': 'Brunei',
+    'BO': 'Bolivia',
+    'BR': 'Brazil',
+    'BS': 'Bahamas',
+    'BT': 'Bhutan',
+    'BZ': 'Belize',
+    'CA': 'Canada',
+    'CH': 'Switzerland',
+    'CL': 'Chile',
+    'CO': 'Colombia',
+    'CR': 'Costa Rica',
+    'CY': 'Cyprus',
+    'CZ': 'Czech Republic',
+    'DE': 'Germany',
+    'DK': 'Denmark',
+    'DO': 'Dominican Republic',
+    'DZ': 'Algeria',
+    'EC': 'Ecuador',
+    'EE': 'Estonia',
+    'EG': 'Egypt',
+    'ES': 'Spain',
+    'FI': 'Finland',
+    'FR': 'France',
+    'GE': 'Georgia',
+    'GH': 'Ghana',
+    'GR': 'Greece',
+    'GT': 'Guatemala',
+    'HK': 'Hong Kong',
+    'HN': 'Honduras',
+    'HR': 'Croatia',
+    'HT': 'Haiti',
+    'HU': 'Hungary',
+    'ID': 'Indonesia',
+    'IE': 'Ireland',
+    'IL': 'Israel',
+    'IM': 'Isle of Man',
+    'IN': 'India',
+    'IS': 'Iceland',
+    'IT': 'Italy',
+    'JE': 'Jersey',
+    'JM': 'Jamaica',
+    'JO': 'Jordan',
+    'JP': 'Japan',
+    'KE': 'Kenya',
+    'KH': 'Cambodia',
+    'KR': 'South Korea',
+    'KY': 'Cayman Islands',
+    'KZ': 'Kazakhstan',
+    'LA': 'Laos',
+    'LB': 'Lebanon',
+    'LI': 'Liechtenstein',
+    'LK': 'Sri Lanka',
+    'LT': 'Lithuania',
+    'LU': 'Luxembourg',
+    'LV': 'Latvia',
+    'MA': 'Morocco',
+    'MC': 'Monaco',
+    'MD': 'Moldova',
+    'ME': 'Montenegro',
+    'MK': 'North Macedonia',
+    'MM': 'Myanmar',
+    'MN': 'Mongolia',
+    'MO': 'Macau',
+    'MT': 'Malta',
+    'MX': 'Mexico',
+    'MY': 'Malaysia',
+    'NG': 'Nigeria',
+    'NI': 'Nicaragua',
+    'NL': 'Netherlands',
+    'NO': 'Norway',
+    'NP': 'Nepal',
+    'NZ': 'New Zealand',
+    'PA': 'Panama',
+    'PE': 'Peru',
+    'PG': 'Papua New Guinea',
+    'PH': 'Philippines',
+    'PK': 'Pakistan',
+    'PL': 'Poland',
+    'PR': 'Puerto Rico',
+    'PT': 'Portugal',
+    'PY': 'Paraguay',
+    'RO': 'Romania',
+    'RS': 'Serbia',
+    'SA': 'Saudi Arabia',
+    'SE': 'Sweden',
+    'SG': 'Singapore',
+    'SI': 'Slovenia',
+    'SK': 'Slovakia',
+    'TH': 'Thailand',
+    'TR': 'Turkey',
+    'TT': 'Trinidad and Tobago',
+    'TW': 'Taiwan',
+    'UA': 'Ukraine',
+    'UK': 'United Kingdom',
+    'US': 'United States',
+    'UY': 'Uruguay',
+    'VE': 'Venezuela',
+    'VN': 'Vietnam',
+    'ZA': 'South Africa',
+}
+
+
+def get_country_name(country_code: Optional[str]) -> str:
+    """
+    Get full country name from ISO 2-letter country code.
+    
+    Args:
+        country_code: Two-letter country code (e.g., 'CH')
+        
+    Returns:
+        Full country name (e.g., 'Switzerland') or 'Unknown' if not found
+    """
+    if country_code is None:
+        return 'Unknown'
+    return COUNTRY_NAMES.get(country_code.upper(), 'Unknown')
 
 
 # ANSI color codes
@@ -164,6 +300,38 @@ def print_progress_bar(completed: int, total: int, file=None, bar_length: int = 
         print(file=file)
 
 
+def extract_country_code(filename: str) -> Optional[str]:
+    """
+    Extract country code from IPVanish .ovpn filename.
+    
+    Args:
+        filename: .ovpn filename (e.g., 'ipvanish-CH-Zurich-zrh-c18.ovpn')
+        
+    Returns:
+        Two-letter country code (e.g., 'CH') or None if pattern doesn't match
+    """
+    # Pattern: ipvanish-{COUNTRY_CODE}-{city}-{code}.ovpn
+    # Example: ipvanish-CH-Zurich-zrh-c18.ovpn -> CH
+    if not filename.startswith('ipvanish-'):
+        return None
+    
+    # Remove 'ipvanish-' prefix
+    remaining = filename[9:]  # len('ipvanish-') = 9
+    
+    # Find the first hyphen after country code (country code is 2 letters)
+    if len(remaining) < 3:  # Need at least 2 chars for country + 1 hyphen
+        return None
+    
+    # Country code should be 2 uppercase letters followed by a hyphen
+    if remaining[2] == '-':
+        country_code = remaining[:2].upper()
+        # Validate it's 2 uppercase letters
+        if country_code.isalpha() and country_code.isupper():
+            return country_code
+    
+    return None
+
+
 def parse_ovpn_file(file_path: Path) -> Optional[str]:
     """
     Parse an .ovpn file to extract the hostname from the 'remote' line.
@@ -189,15 +357,15 @@ def parse_ovpn_file(file_path: Path) -> Optional[str]:
     return None
 
 
-def discover_ovpn_files(directory: Path) -> Dict[str, str]:
+def discover_ovpn_files(directory: Path) -> Dict[str, Tuple[str, Optional[str]]]:
     """
-    Discover all .ovpn files in the directory and extract hostnames.
+    Discover all .ovpn files in the directory and extract hostnames and country codes.
     
     Args:
         directory: Directory containing .ovpn files
         
     Returns:
-        Dictionary mapping filename to hostname
+        Dictionary mapping filename to (hostname, country_code) tuple
     """
     files_to_hosts = {}
     
@@ -212,8 +380,9 @@ def discover_ovpn_files(directory: Path) -> Dict[str, str]:
     
     for ovpn_file in ovpn_files:
         hostname = parse_ovpn_file(ovpn_file)
+        country_code = extract_country_code(ovpn_file.name)
         if hostname:
-            files_to_hosts[ovpn_file.name] = hostname
+            files_to_hosts[ovpn_file.name] = (hostname, country_code)
         else:
             warning_msg = colorize(f"Warning: No 'remote' line found in {ovpn_file.name}", Colors.YELLOW, sys.stderr)
             print(warning_msg, file=sys.stderr)
@@ -221,9 +390,9 @@ def discover_ovpn_files(directory: Path) -> Dict[str, str]:
     return files_to_hosts
 
 
-def ping_host(hostname: str, count: int = 4, timeout: float = 3.0) -> Tuple[Optional[float], str]:
+def ping_host(hostname: str, count: int = 4, timeout: float = 3.0) -> Tuple[Optional[float], Optional[Dict[str, Optional[float]]], float, str]:
     """
-    Ping a host multiple times and calculate average latency.
+    Ping a host multiple times and calculate average latency, jitter, and packet loss.
     
     Args:
         hostname: Hostname or IP address to ping
@@ -231,17 +400,19 @@ def ping_host(hostname: str, count: int = 4, timeout: float = 3.0) -> Tuple[Opti
         timeout: Timeout in seconds for each ping
         
     Returns:
-        Tuple of (average_latency_ms, status_message)
-        If all pings fail, returns (None, error_message)
+        Tuple of (average_latency_ms, jitter_metrics_dict, packet_loss_percent, status_message)
+        If all pings fail, returns (None, None, 100.0, error_message)
+        jitter_metrics_dict contains: {'std_dev': float, 'mean_dev': float, 'min_max_range': float}
+        packet_loss_percent is 0.0-100.0
     """
     # First, try to resolve the hostname to detect DNS failures
     try:
         socket.gethostbyname(hostname)
     except socket.gaierror:
-        return (None, "DNS Resolution Failed")
+        return (None, None, 100.0, "DNS Resolution Failed")
     except Exception as e:
         # Other socket errors
-        return (None, f"Resolution Error: {str(e)}")
+        return (None, None, 100.0, f"Resolution Error: {str(e)}")
     
     latencies = []
     dns_errors = 0
@@ -287,52 +458,182 @@ def ping_host(hostname: str, count: int = 4, timeout: float = 3.0) -> Tuple[Opti
             else:
                 timeout_errors += 1
     
+    # Calculate packet loss percentage
+    successful_pings = len(latencies)
+    failed_pings = count - successful_pings
+    packet_loss_percent = (failed_pings / count) * 100.0 if count > 0 else 100.0
+    
     # If we got DNS errors for all attempts, report DNS failure
     if dns_errors == count and len(latencies) == 0:
-        return (None, "DNS Resolution Failed")
+        return (None, None, packet_loss_percent, "DNS Resolution Failed")
     
-    # If we got some successful pings, return average
+    # If we got some successful pings, calculate average and jitter
     if latencies:
         avg_latency = sum(latencies) / len(latencies)
-        return (avg_latency, "Success")
+        
+        # Calculate jitter metrics if we have at least 2 measurements
+        if len(latencies) >= 2:
+            # Standard deviation
+            variance = sum((x - avg_latency) ** 2 for x in latencies) / len(latencies)
+            std_dev = math.sqrt(variance)
+            
+            # Mean deviation
+            mean_dev = sum(abs(x - avg_latency) for x in latencies) / len(latencies)
+            
+            # Min/Max range
+            min_max_range = max(latencies) - min(latencies)
+            
+            jitter_metrics = {
+                'std_dev': std_dev,
+                'mean_dev': mean_dev,
+                'min_max_range': min_max_range
+            }
+        else:
+            # Not enough data for meaningful jitter
+            jitter_metrics = {
+                'std_dev': None,
+                'mean_dev': None,
+                'min_max_range': None
+            }
+        
+        return (avg_latency, jitter_metrics, packet_loss_percent, "Success")
     
     # If all attempts failed but not all were DNS errors
     if timeout_errors > 0:
-        return (None, "Timeout/Unreachable")
+        return (None, None, packet_loss_percent, "Timeout/Unreachable")
     
     # If we had some DNS errors but not all
     if dns_errors > 0:
-        return (None, "DNS Resolution Failed")
+        return (None, None, packet_loss_percent, "DNS Resolution Failed")
     
-    return (None, "Failed")
+    return (None, None, packet_loss_percent, "Failed")
 
 
-def test_host_latency(filename: str, hostname: str, pings: int, timeout: float) -> Dict:
+def calculate_score(
+    latency: Optional[float], 
+    jitter: Optional[Dict[str, Optional[float]]], 
+    packet_loss: float,
+    country_code: Optional[str],
+    privacy_config: Dict
+) -> float:
+    """
+    Calculate a composite score (0-100) based on latency, jitter, packet loss, and privacy.
+    
+    Args:
+        latency: Average latency in milliseconds (None if failed)
+        jitter: Jitter metrics dictionary with 'std_dev' key (None if unavailable)
+        packet_loss: Packet loss percentage (0.0-100.0)
+        country_code: Two-letter country code (e.g., 'CH') or None
+        privacy_config: Dictionary with privacy settings:
+            - 'enabled': bool - Whether privacy scoring is enabled
+            - 'weight': float - Weight of privacy in score (0.0-1.0)
+            - 'scores': Dict[str, int] - Mapping of country codes to privacy scores (0-100)
+        
+    Returns:
+        Score from 0.0 to 100.0, where 100 is best and 0 is worst
+    """
+    # If latency is None, the connection failed - score is 0
+    if latency is None:
+        return 0.0
+    
+    # Get privacy score for this country (default to 0 if not found or disabled)
+    privacy_enabled = privacy_config.get('enabled', False)
+    privacy_weight = privacy_config.get('weight', 0.35)
+    privacy_scores = privacy_config.get('scores', {})
+    
+    if privacy_enabled and country_code:
+        privacy_score = privacy_scores.get(country_code, 0)
+    else:
+        privacy_score = 0
+    
+    # Get jitter std_dev, default to a high value if unavailable
+    jitter_std_dev = jitter.get('std_dev') if jitter else None
+    if jitter_std_dev is None:
+        # If we don't have jitter data, assume worst case for scoring
+        jitter_std_dev = 100.0
+    
+    # Calculate component scores (each normalized to 0-100)
+    # Latency score: 0ms = 100 points, 500ms = 0 points (linear)
+    # Formula: max(0, 100 - (latency / 5))
+    latency_score = max(0.0, 100.0 - (latency / 5.0))
+    
+    # Jitter score: 0ms = 100 points, 50ms = 0 points (linear)
+    # Formula: max(0, 100 - (jitter * 2))
+    jitter_score = max(0.0, 100.0 - (jitter_std_dev * 2.0))
+    
+    # Packet loss score: 0% = 100 points, 100% = 0 points (linear)
+    # Formula: 100 - packet_loss
+    packet_loss_score = max(0.0, 100.0 - packet_loss)
+    
+    # Calculate weights: if privacy weight is W, remaining (1-W) is distributed
+    # among latency, jitter, and packet loss
+    if privacy_enabled:
+        remaining_weight = 1.0 - privacy_weight
+        latency_weight = remaining_weight * 0.4
+        jitter_weight = remaining_weight * 0.3
+        packet_loss_weight = remaining_weight * 0.3
+        
+        composite_score = (
+            (privacy_score * privacy_weight) +
+            (latency_score * latency_weight) +
+            (jitter_score * jitter_weight) +
+            (packet_loss_score * packet_loss_weight)
+        )
+    else:
+        # No privacy scoring: use original weights
+        composite_score = (latency_score * 0.4) + (jitter_score * 0.3) + (packet_loss_score * 0.3)
+    
+    # Round to 2 decimal places
+    return round(composite_score, 2)
+
+
+def test_host_latency(filename: str, hostname: str, country_code: Optional[str], pings: int, timeout: float, privacy_config: Dict) -> Dict:
     """
     Test latency for a single host (wrapper for threading).
     
     Args:
         filename: Name of the .ovpn file
         hostname: Hostname to ping
+        country_code: Two-letter country code or None
         pings: Number of ping attempts
         timeout: Timeout in seconds
+        privacy_config: Dictionary with privacy settings for score calculation
         
     Returns:
-        Dictionary with results
+        Dictionary with results including latency, jitter metrics, packet loss, and privacy info
     """
-    latency, status = ping_host(hostname, count=pings, timeout=timeout)
+    latency, jitter_metrics, packet_loss, status = ping_host(hostname, count=pings, timeout=timeout)
+    
+    # Get privacy score for this country
+    privacy_enabled = privacy_config.get('enabled', False)
+    privacy_scores = privacy_config.get('scores', {})
+    privacy_score = 0
+    if privacy_enabled and country_code:
+        privacy_score = privacy_scores.get(country_code, 0)
+    
+    # Calculate composite score
+    score = calculate_score(latency, jitter_metrics, packet_loss, country_code, privacy_config)
+    
+    # Get country name
+    country_name = get_country_name(country_code)
     
     return {
         'filename': filename,
         'hostname': hostname,
+        'country_code': country_code,
+        'country_name': country_name,
+        'privacy_score': privacy_score,
         'latency': latency,
+        'jitter': jitter_metrics,
+        'packet_loss': packet_loss,
+        'score': score,
         'status': status
     }
 
 
 def format_output(results: List[Dict]) -> None:
     """
-    Format and display results as a table sorted by latency.
+    Format and display results as a table sorted by composite score.
     
     Args:
         results: List of result dictionaries
@@ -341,15 +642,18 @@ def format_output(results: List[Dict]) -> None:
     successful = [r for r in results if r['latency'] is not None]
     failed = [r for r in results if r['latency'] is None]
     
-    # Sort successful by latency (best to worst)
-    successful.sort(key=lambda x: x['latency'])
+    # Sort successful by score (best to worst, highest score first)
+    successful.sort(key=lambda x: x.get('score', 0.0), reverse=True)
     
-    # Combine: successful first, then failed
+    # Sort failed by score (they should all be 0.0, but keep them together)
+    failed.sort(key=lambda x: x.get('score', 0.0), reverse=True)
+    
+    # Combine: successful first (sorted by score), then failed
     sorted_results = successful + failed
     
     # Print header with colors
-    separator = "=" * 100
-    header = f"{'Filename':<45} {'Hostname':<30} {'Latency (ms)':<15} {'Status':<15}"
+    separator = "=" * 170
+    header = f"{'Filename':<30} {'Hostname':<18} {'Country':<22} {'Score':<8} {'Latency (ms)':<15} {'Jitter (ms)':<25} {'Loss %':<10} {'Status':<15}"
     print("\n" + separator)
     # Use bold cyan for header
     header_colored = colorize(header, Colors.BOLD + Colors.BRIGHT_CYAN)
@@ -360,13 +664,77 @@ def format_output(results: List[Dict]) -> None:
     for result in sorted_results:
         filename = result['filename']
         hostname = result['hostname']
+        country_name = result.get('country_name', 'Unknown')
+        privacy_score = result.get('privacy_score', 0)
+        score = result.get('score', 0.0)
         latency = result['latency']
+        jitter = result.get('jitter', None)
+        packet_loss = result.get('packet_loss', 100.0)
         status = result['status']
+        
+        # Format and colorize country with privacy score
+        if privacy_score >= 80:
+            country_display = f"{country_name} ({privacy_score}) ★"
+            country_colored = colorize(country_display, Colors.BRIGHT_GREEN)
+        elif privacy_score >= 60:
+            country_display = f"{country_name} ({privacy_score})"
+            country_colored = colorize(country_display, Colors.GREEN)
+        elif privacy_score >= 40:
+            country_display = f"{country_name} ({privacy_score})"
+            country_colored = colorize(country_display, Colors.YELLOW)
+        else:
+            country_display = f"{country_name} ({privacy_score})"
+            country_colored = colorize(country_display, Colors.RED)
+        
+        # Format and colorize score
+        score_str = f"{score:.1f}"
+        if score >= 80:  # Excellent score
+            score_colored = colorize(score_str, Colors.BRIGHT_GREEN)
+        elif score >= 60:  # Good score
+            score_colored = colorize(score_str, Colors.GREEN)
+        elif score >= 40:  # Fair score
+            score_colored = colorize(score_str, Colors.YELLOW)
+        else:  # Poor score
+            score_colored = colorize(score_str, Colors.RED)
         
         if latency is not None:
             latency_str = f"{latency:.2f}"
         else:
             latency_str = "N/A"
+        
+        # Format jitter metrics
+        if jitter and jitter.get('std_dev') is not None:
+            std_dev = jitter['std_dev']
+            mean_dev = jitter['mean_dev']
+            min_max_range = jitter['min_max_range']
+            jitter_str = f"{std_dev:.2f} / {mean_dev:.2f} / {min_max_range:.2f}"
+            
+            # Colorize jitter based on severity (using std_dev as primary metric)
+            if std_dev < 10:  # Low jitter
+                jitter_colored = colorize(jitter_str, Colors.BRIGHT_GREEN)
+            elif std_dev < 30:  # Medium jitter
+                jitter_colored = colorize(jitter_str, Colors.YELLOW)
+            else:  # High jitter
+                jitter_colored = colorize(jitter_str, Colors.RED)
+        else:
+            jitter_str = "N/A"
+            jitter_colored = colorize(jitter_str, Colors.GRAY)
+        
+        # Format and colorize packet loss
+        if packet_loss is not None:
+            packet_loss_str = f"{packet_loss:.1f}%"
+            # Colorize packet loss based on severity
+            if packet_loss == 0.0:  # No packet loss
+                packet_loss_colored = colorize(packet_loss_str, Colors.BRIGHT_GREEN)
+            elif packet_loss < 5.0:  # Low packet loss
+                packet_loss_colored = colorize(packet_loss_str, Colors.GREEN)
+            elif packet_loss < 25.0:  # Medium packet loss
+                packet_loss_colored = colorize(packet_loss_str, Colors.YELLOW)
+            else:  # High packet loss
+                packet_loss_colored = colorize(packet_loss_str, Colors.RED)
+        else:
+            packet_loss_str = "N/A"
+            packet_loss_colored = colorize(packet_loss_str, Colors.GRAY)
         
         # Colorize based on status
         if latency is None:
@@ -383,7 +751,7 @@ def format_output(results: List[Dict]) -> None:
             else:  # Higher latency
                 latency_colored = latency_str
         
-        print(f"{filename:<45} {hostname:<30} {latency_colored:<15} {status_colored:<15}")
+        print(f"{filename:<30} {hostname:<18} {country_colored:<22} {score_colored:<8} {latency_colored:<15} {jitter_colored:<25} {packet_loss_colored:<10} {status_colored:<15}")
     
     print(separator)
     
@@ -407,8 +775,20 @@ def format_output(results: List[Dict]) -> None:
         print(other_msg)
     
     if successful:
+        # Results are already sorted by score, so first is best, last is worst
+        best_score_msg = colorize(
+            f"\nBest score: {successful[0]['hostname']} (Score: {successful[0].get('score', 0.0):.1f})",
+            Colors.BRIGHT_GREEN
+        )
+        worst_score_msg = colorize(
+            f"Worst score: {successful[-1]['hostname']} (Score: {successful[-1].get('score', 0.0):.1f})",
+            Colors.RED
+        )
+        print(best_score_msg)
+        print(worst_score_msg)
+        
         best_msg = colorize(
-            f"\nBest latency: {successful[0]['hostname']} ({successful[0]['latency']:.2f} ms)",
+            f"Best latency: {successful[0]['hostname']} ({successful[0]['latency']:.2f} ms)",
             Colors.BRIGHT_GREEN
         )
         worst_msg = colorize(
@@ -417,6 +797,58 @@ def format_output(results: List[Dict]) -> None:
         )
         print(best_msg)
         print(worst_msg)
+        
+        # Find best and worst jitter (by std_dev)
+        successful_with_jitter = [r for r in successful if r.get('jitter') and r['jitter'].get('std_dev') is not None]
+        if successful_with_jitter:
+            # Sort by jitter (std_dev)
+            best_jitter = min(successful_with_jitter, key=lambda x: x['jitter']['std_dev'])
+            worst_jitter = max(successful_with_jitter, key=lambda x: x['jitter']['std_dev'])
+            
+            best_jitter_msg = colorize(
+                f"Best jitter: {best_jitter['hostname']} (std_dev: {best_jitter['jitter']['std_dev']:.2f} ms)",
+                Colors.BRIGHT_GREEN
+            )
+            worst_jitter_msg = colorize(
+                f"Worst jitter: {worst_jitter['hostname']} (std_dev: {worst_jitter['jitter']['std_dev']:.2f} ms)",
+                Colors.RED
+            )
+            print(best_jitter_msg)
+            print(worst_jitter_msg)
+        
+        # Find best and worst packet loss
+        successful_with_loss = [r for r in successful if r.get('packet_loss') is not None]
+        if successful_with_loss:
+            best_loss = min(successful_with_loss, key=lambda x: x['packet_loss'])
+            worst_loss = max(successful_with_loss, key=lambda x: x['packet_loss'])
+            
+            best_loss_msg = colorize(
+                f"Best packet loss: {best_loss['hostname']} ({best_loss['packet_loss']:.1f}%)",
+                Colors.BRIGHT_GREEN
+            )
+            worst_loss_msg = colorize(
+                f"Worst packet loss: {worst_loss['hostname']} ({worst_loss['packet_loss']:.1f}%)",
+                Colors.RED
+            )
+            print(best_loss_msg)
+            print(worst_loss_msg)
+        
+        # Find best and worst privacy scores
+        successful_with_privacy = [r for r in successful if r.get('privacy_score') is not None]
+        if successful_with_privacy:
+            best_privacy = max(successful_with_privacy, key=lambda x: x['privacy_score'])
+            worst_privacy = min(successful_with_privacy, key=lambda x: x['privacy_score'])
+            
+            best_privacy_msg = colorize(
+                f"Best privacy: {best_privacy['hostname']} ({best_privacy.get('country_name', 'Unknown')}, score: {best_privacy['privacy_score']})",
+                Colors.BRIGHT_GREEN
+            )
+            worst_privacy_msg = colorize(
+                f"Worst privacy: {worst_privacy['hostname']} ({worst_privacy.get('country_name', 'Unknown')}, score: {worst_privacy['privacy_score']})",
+                Colors.RED
+            )
+            print(best_privacy_msg)
+            print(worst_privacy_msg)
 
 
 def main():
@@ -470,6 +902,16 @@ def main():
         error_msg = colorize(f"Error loading configuration: {e}", Colors.RED, sys.stderr)
         print(error_msg, file=sys.stderr)
         sys.exit(1)
+    
+    # Load privacy configuration
+    privacy_enabled = is_privacy_scoring_enabled(config)
+    privacy_weight = get_privacy_weight(config)
+    privacy_scores = get_privacy_scores(config)
+    privacy_config = {
+        'enabled': privacy_enabled,
+        'weight': privacy_weight,
+        'scores': privacy_scores
+    }
     
     # Determine provider
     provider_name = args.provider if args.provider else get_default_provider(config)
@@ -547,10 +989,12 @@ def main():
                     test_host_latency,
                     filename,
                     hostname,
+                    country_code,
                     args.pings,
-                    args.timeout
-                ): (filename, hostname)
-                for filename, hostname in files_to_hosts.items()
+                    args.timeout,
+                    privacy_config
+                ): (filename, hostname, country_code)
+                for filename, (hostname, country_code) in files_to_hosts.items()
             }
             
             # Collect results as they complete
@@ -566,7 +1010,7 @@ def main():
                     result = future.result()
                     results.append(result)
                 except Exception as e:
-                    filename, hostname = future_to_host[future]
+                    filename, hostname, country_code = future_to_host[future]
                     error_msg = colorize(
                         f"Error testing {hostname} from {filename}: {e}",
                         Colors.RED,
@@ -576,6 +1020,9 @@ def main():
                     results.append({
                         'filename': filename,
                         'hostname': hostname,
+                        'country_code': country_code,
+                        'country_name': get_country_name(country_code),
+                        'privacy_score': 0,
                         'latency': None,
                         'status': f'Error: {str(e)}'
                     })

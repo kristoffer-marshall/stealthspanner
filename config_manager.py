@@ -157,3 +157,98 @@ def get_config_directory(config: configparser.ConfigParser, provider_name: Optio
     
     return config.get('DEFAULT', 'config_directory', fallback='IPVanish')
 
+
+def get_default_privacy_scores() -> Dict[str, int]:
+    """
+    Return default privacy scores for common countries.
+    
+    Returns:
+        Dictionary mapping country codes to privacy scores (0-100)
+    """
+    return {
+        'CH': 100, 'PA': 95, 'RO': 90, 'IS': 90,
+        'VG': 85, 'LI': 85, 'SC': 80, 'AD': 80, 'MC': 80,
+        'MD': 75, 'SM': 75, 'VA': 70, 'CY': 65, 'IE': 60,
+        'NO': 50, 'PT': 50, 'SE': 45, 'IT': 45, 'ES': 45,
+        'DE': 40, 'FR': 40, 'NL': 40,
+        'NZ': 35, 'BE': 35, 'DK': 35,
+        'CA': 30, 'AU': 30,
+        'UK': 25,
+        'US': 20,
+    }
+
+
+def is_privacy_scoring_enabled(config: configparser.ConfigParser) -> bool:
+    """
+    Check if privacy scoring is enabled in configuration.
+    
+    Args:
+        config: ConfigParser object with loaded configuration
+        
+    Returns:
+        True if privacy scoring is enabled, False otherwise (default: True)
+    """
+    if not config.has_section('PRIVACY'):
+        return True  # Default to enabled
+    return config.getboolean('PRIVACY', 'enabled', fallback=True)
+
+
+def get_privacy_weight(config: configparser.ConfigParser) -> float:
+    """
+    Get the weight of privacy in composite score.
+    
+    Args:
+        config: ConfigParser object with loaded configuration
+        
+    Returns:
+        Weight value (0.0-1.0) for privacy in score (default: 0.35)
+    """
+    if not config.has_section('PRIVACY'):
+        return 0.35
+    return config.getfloat('PRIVACY', 'weight', fallback=0.35)
+
+
+def get_privacy_scores(config: configparser.ConfigParser) -> Dict[str, int]:
+    """
+    Get privacy scores for countries from configuration.
+    
+    Args:
+        config: ConfigParser object with loaded configuration
+        
+    Returns:
+        Dictionary mapping country codes to privacy scores (0-100)
+        Merges config scores with defaults (config takes precedence)
+    """
+    default_scores = get_default_privacy_scores()
+    
+    if not config.has_section('PRIVACY'):
+        return default_scores
+    
+    # Get privacy_scores from config
+    privacy_scores_str = config.get('PRIVACY', 'privacy_scores', fallback='')
+    
+    if not privacy_scores_str:
+        return default_scores
+    
+    # Parse comma-separated COUNTRY=SCORE format
+    config_scores = {}
+    for item in privacy_scores_str.split(','):
+        item = item.strip()
+        if '=' in item:
+            try:
+                country_code, score_str = item.split('=', 1)
+                country_code = country_code.strip().upper()
+                score = int(score_str.strip())
+                # Clamp score to 0-100 range
+                score = max(0, min(100, score))
+                config_scores[country_code] = score
+            except (ValueError, AttributeError):
+                # Skip invalid entries
+                continue
+    
+    # Merge: config scores override defaults
+    merged_scores = default_scores.copy()
+    merged_scores.update(config_scores)
+    
+    return merged_scores
+
