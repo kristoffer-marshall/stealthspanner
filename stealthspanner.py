@@ -238,6 +238,24 @@ def colorize(text: str, color: str, file=None) -> str:
     return text
 
 
+def pad_and_colorize(text: str, width: int, color: str, file=None) -> str:
+    """
+    Pad text to specified width, then colorize it.
+    This ensures proper column alignment when colors are used.
+    
+    Args:
+        text: Text to pad and colorize
+        width: Desired display width
+        color: ANSI color code
+        file: File object to check color support (default: stdout)
+        
+    Returns:
+        Padded and colorized text
+    """
+    padded = f"{text:<{width}}"
+    return colorize(padded, color, file)
+
+
 class Tee:
     """A file-like object that writes to multiple file handles (like Unix tee command)."""
     
@@ -652,8 +670,8 @@ def format_output(results: List[Dict]) -> None:
     sorted_results = successful + failed
     
     # Print header with colors
-    separator = "=" * 170
-    header = f"{'Filename':<30} {'Hostname':<18} {'Country':<22} {'Score':<8} {'Latency (ms)':<15} {'Jitter (ms)':<25} {'Loss %':<10} {'Status':<15}"
+    separator = "=" * 150
+    header = f"{'Filename':<40} {'Country':<25} {'Score':<8} {'Latency (ms)':<15} {'Jitter (ms)':<25} {'Loss %':<10} {'Status':<15}"
     print("\n" + separator)
     # Use bold cyan for header
     header_colored = colorize(header, Colors.BOLD + Colors.BRIGHT_CYAN)
@@ -663,7 +681,6 @@ def format_output(results: List[Dict]) -> None:
     # Print results with colors
     for result in sorted_results:
         filename = result['filename']
-        hostname = result['hostname']
         country_name = result.get('country_name', 'Unknown')
         privacy_score = result.get('privacy_score', 0)
         score = result.get('score', 0.0)
@@ -675,27 +692,27 @@ def format_output(results: List[Dict]) -> None:
         # Format and colorize country with privacy score
         if privacy_score >= 80:
             country_display = f"{country_name} ({privacy_score}) ★"
-            country_colored = colorize(country_display, Colors.BRIGHT_GREEN)
+            country_color = Colors.BRIGHT_GREEN
         elif privacy_score >= 60:
             country_display = f"{country_name} ({privacy_score})"
-            country_colored = colorize(country_display, Colors.GREEN)
+            country_color = Colors.GREEN
         elif privacy_score >= 40:
             country_display = f"{country_name} ({privacy_score})"
-            country_colored = colorize(country_display, Colors.YELLOW)
+            country_color = Colors.YELLOW
         else:
             country_display = f"{country_name} ({privacy_score})"
-            country_colored = colorize(country_display, Colors.RED)
+            country_color = Colors.RED
         
         # Format and colorize score
         score_str = f"{score:.1f}"
         if score >= 80:  # Excellent score
-            score_colored = colorize(score_str, Colors.BRIGHT_GREEN)
+            score_color = Colors.BRIGHT_GREEN
         elif score >= 60:  # Good score
-            score_colored = colorize(score_str, Colors.GREEN)
+            score_color = Colors.GREEN
         elif score >= 40:  # Fair score
-            score_colored = colorize(score_str, Colors.YELLOW)
+            score_color = Colors.YELLOW
         else:  # Poor score
-            score_colored = colorize(score_str, Colors.RED)
+            score_color = Colors.RED
         
         if latency is not None:
             latency_str = f"{latency:.2f}"
@@ -709,49 +726,57 @@ def format_output(results: List[Dict]) -> None:
             min_max_range = jitter['min_max_range']
             jitter_str = f"{std_dev:.2f} / {mean_dev:.2f} / {min_max_range:.2f}"
             
-            # Colorize jitter based on severity (using std_dev as primary metric)
+            # Determine jitter color based on severity (using std_dev as primary metric)
             if std_dev < 10:  # Low jitter
-                jitter_colored = colorize(jitter_str, Colors.BRIGHT_GREEN)
+                jitter_color = Colors.BRIGHT_GREEN
             elif std_dev < 30:  # Medium jitter
-                jitter_colored = colorize(jitter_str, Colors.YELLOW)
+                jitter_color = Colors.YELLOW
             else:  # High jitter
-                jitter_colored = colorize(jitter_str, Colors.RED)
+                jitter_color = Colors.RED
         else:
             jitter_str = "N/A"
-            jitter_colored = colorize(jitter_str, Colors.GRAY)
+            jitter_color = Colors.GRAY
         
         # Format and colorize packet loss
         if packet_loss is not None:
             packet_loss_str = f"{packet_loss:.1f}%"
-            # Colorize packet loss based on severity
+            # Determine packet loss color based on severity
             if packet_loss == 0.0:  # No packet loss
-                packet_loss_colored = colorize(packet_loss_str, Colors.BRIGHT_GREEN)
+                packet_loss_color = Colors.BRIGHT_GREEN
             elif packet_loss < 5.0:  # Low packet loss
-                packet_loss_colored = colorize(packet_loss_str, Colors.GREEN)
+                packet_loss_color = Colors.GREEN
             elif packet_loss < 25.0:  # Medium packet loss
-                packet_loss_colored = colorize(packet_loss_str, Colors.YELLOW)
+                packet_loss_color = Colors.YELLOW
             else:  # High packet loss
-                packet_loss_colored = colorize(packet_loss_str, Colors.RED)
+                packet_loss_color = Colors.RED
         else:
             packet_loss_str = "N/A"
-            packet_loss_colored = colorize(packet_loss_str, Colors.GRAY)
+            packet_loss_color = Colors.GRAY
         
-        # Colorize based on status
+        # Determine status and latency colors
         if latency is None:
             # Failed - color in red
-            status_colored = colorize(status, Colors.RED)
-            latency_colored = colorize(latency_str, Colors.RED)
+            status_color = Colors.RED
+            latency_color = Colors.RED
         else:
             # Success - keep default or subtle green for very low latency
-            status_colored = colorize(status, Colors.BRIGHT_GREEN)
+            status_color = Colors.BRIGHT_GREEN
             if latency < 50:  # Very good latency
-                latency_colored = colorize(latency_str, Colors.BRIGHT_GREEN)
+                latency_color = Colors.BRIGHT_GREEN
             elif latency < 100:  # Good latency
-                latency_colored = colorize(latency_str, Colors.GREEN)
+                latency_color = Colors.GREEN
             else:  # Higher latency
-                latency_colored = latency_str
+                latency_color = None  # No color
         
-        print(f"{filename:<30} {hostname:<18} {country_colored:<22} {score_colored:<8} {latency_colored:<15} {jitter_colored:<25} {packet_loss_colored:<10} {status_colored:<15}")
+        # Use pad_and_colorize for proper column alignment
+        country_colored = pad_and_colorize(country_display, 25, country_color)
+        score_colored = pad_and_colorize(score_str, 8, score_color)
+        latency_colored = pad_and_colorize(latency_str, 15, latency_color) if latency_color else f"{latency_str:<15}"
+        jitter_colored = pad_and_colorize(jitter_str, 25, jitter_color)
+        packet_loss_colored = pad_and_colorize(packet_loss_str, 10, packet_loss_color)
+        status_colored = pad_and_colorize(status, 15, status_color)
+        
+        print(f"{filename:<40} {country_colored} {score_colored} {latency_colored} {jitter_colored} {packet_loss_colored} {status_colored}")
     
     print(separator)
     
