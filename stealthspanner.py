@@ -10,20 +10,13 @@ with automatic configuration download.
 import argparse
 import configparser
 import math
+import re
 import socket
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-
-try:
-    import ping3
-    import ping3.errors
-    # Enable exceptions mode for better error detection
-    ping3.EXCEPTIONS = True
-except ImportError:
-    print("Error: ping3 library is required. Install it with: pip install ping3")
-    sys.exit(1)
 
 # Import our modules
 from config_manager import (
@@ -411,6 +404,7 @@ def discover_ovpn_files(directory: Path) -> Dict[str, Tuple[str, Optional[str]]]
 def ping_host(hostname: str, count: int = 4, timeout: float = 3.0) -> Tuple[Optional[float], Optional[Dict[str, Optional[float]]], float, str]:
     """
     Ping a host multiple times and calculate average latency, jitter, and packet loss.
+    Uses the system ping command via subprocess to avoid permission issues.
     
     Args:
         hostname: Hostname or IP address to ping
@@ -432,99 +426,124 @@ def ping_host(hostname: str, count: int = 4, timeout: float = 3.0) -> Tuple[Opti
         # Other socket errors
         return (None, None, 100.0, f"Resolution Error: {str(e)}")
     
-    latencies = []
-    dns_errors = 0
-    timeout_errors = 0
-    
-    for i in range(count):
-        try:
-            latency = ping3.ping(hostname, timeout=timeout, unit='ms')
-            if latency is not None and latency >= 0:
-                # ping3 can return 0.0 for very fast responses, but legitimate 0ms pings are extremely rare
-                # If we get 0.0, it might indicate a problem. Verify with another ping.
-                if latency == 0.0:
-                    # Double-check: try another ping to verify legitimacy
-                    verify_latency = ping3.ping(hostname, timeout=timeout, unit='ms')
-                    if verify_latency is None:
-                        # Verification failed - likely an issue
-                        continue
-                    elif verify_latency == 0.0:
-                        # Both returned 0.0 - could be legitimate (very fast) or an error
-                        # Accept it but note that 0.0 is suspicious
-                        latencies.append(0.0)
-                    else:
-                        # Verification returned a real value - use that instead
-                        latencies.append(verify_latency)
-                else:
+    # Use system ping command - it has proper permissions and works reliably
+    # Format: ping -c <count> -W <timeout_seconds> <hostname>
+    # -c: count of pings
+    # -W: timeout in seconds (Linux)
+    # -w: timeout in seconds (alternative, some systems)
+    try:
+        # Convert timeout to milliseconds for ping command (ping uses seconds, but we want precise timeout)
+        # Use -W for Linux (timeout in seconds) or -w for some other systems
+        # We'll use -W which works on Linux
+        timeout_seconds = int(math.ceil(timeout))
+        if timeout_seconds < 1:
+            timeout_seconds = 1
+        
+        # Run ping command
+        result = subprocess.run(
+            ['ping', '-c', str(count), '-W', str(timeout_seconds), hostname],
+            capture_output=True,
+            text=True,
+            timeout=timeout * count + 5  # Add buffer for command overhead
+        )
+        
+        # Parse ping output
+        output = result.stdout + result.stderr
+        
+        # Check for DNS errors in output
+        if 'Name or service not known' in output or 'cannot resolve' in output.lower() or 'unknown host' in output.lower():
+            return (None, None, 100.0, "DNS Resolution Failed")
+        
+        # Extract individual ping latencies from output
+        # Pattern: "64 bytes from <host>: icmp_seq=<n> ttl=<ttl> time=<time> ms"
+        latency_pattern = r'time=([\d.]+)\s*ms'
+        latencies = []
+        
+        for line in output.split('\n'):
+            match = re.search(latency_pattern, line)
+            if match:
+                try:
+                    latency = float(match.group(1))
                     latencies.append(latency)
-        except ping3.errors.HostUnknown:
-            dns_errors += 1
-        except ping3.errors.Timeout:
-            timeout_errors += 1
-        except ping3.errors.PingError as e:
-            # Check if it's a DNS-related error
-            error_str = str(e).lower()
-            if 'cannot resolve' in error_str or 'unknown host' in error_str or 'name or service not known' in error_str:
-                dns_errors += 1
-            else:
-                timeout_errors += 1
-        except Exception as e:
-            # Check error message for DNS-related issues
-            error_str = str(e).lower()
-            if 'cannot resolve' in error_str or 'unknown host' in error_str or 'name or service not known' in error_str or 'nodename nor servname provided' in error_str:
-                dns_errors += 1
-            else:
-                timeout_errors += 1
-    
-    # Calculate packet loss percentage
-    successful_pings = len(latencies)
-    failed_pings = count - successful_pings
-    packet_loss_percent = (failed_pings / count) * 100.0 if count > 0 else 100.0
-    
-    # If we got DNS errors for all attempts, report DNS failure
-    if dns_errors == count and len(latencies) == 0:
-        return (None, None, packet_loss_percent, "DNS Resolution Failed")
-    
-    # If we got some successful pings, calculate average and jitter
-    if latencies:
-        avg_latency = sum(latencies) / len(latencies)
+                except ValueError:
+                    continue
         
-        # Calculate jitter metrics if we have at least 2 measurements
-        if len(latencies) >= 2:
-            # Standard deviation
-            variance = sum((x - avg_latency) ** 2 for x in latencies) / len(latencies)
-            std_dev = math.sqrt(variance)
-            
-            # Mean deviation
-            mean_dev = sum(abs(x - avg_latency) for x in latencies) / len(latencies)
-            
-            # Min/Max range
-            min_max_range = max(latencies) - min(latencies)
-            
-            jitter_metrics = {
-                'std_dev': std_dev,
-                'mean_dev': mean_dev,
-                'min_max_range': min_max_range
-            }
-        else:
-            # Not enough data for meaningful jitter
-            jitter_metrics = {
-                'std_dev': None,
-                'mean_dev': None,
-                'min_max_range': None
-            }
+        # Also try to extract from statistics line if individual pings weren't captured
+        # Pattern: "rtt min/avg/max/mdev = <min>/<avg>/<max>/<mdev> ms"
+        if not latencies:
+            stats_pattern = r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)\s*ms'
+            stats_match = re.search(stats_pattern, output)
+            if stats_match:
+                # If we only have stats, we can't calculate jitter properly
+                # But we can use the average
+                try:
+                    avg_latency = float(stats_match.group(2))
+                    latencies = [avg_latency] * count  # Approximate - not ideal but better than nothing
+                except ValueError:
+                    pass
         
-        return (avg_latency, jitter_metrics, packet_loss_percent, "Success")
-    
-    # If all attempts failed but not all were DNS errors
-    if timeout_errors > 0:
-        return (None, None, packet_loss_percent, "Timeout/Unreachable")
-    
-    # If we had some DNS errors but not all
-    if dns_errors > 0:
-        return (None, None, packet_loss_percent, "DNS Resolution Failed")
-    
-    return (None, None, packet_loss_percent, "Failed")
+        # Extract packet loss from statistics
+        # Pattern: "X packets transmitted, Y received, Z% packet loss"
+        packet_loss_percent = 100.0
+        loss_pattern = r'(\d+)% packet loss'
+        loss_match = re.search(loss_pattern, output)
+        if loss_match:
+            try:
+                packet_loss_percent = float(loss_match.group(1))
+            except ValueError:
+                pass
+        
+        # If we got successful pings, calculate metrics
+        if latencies:
+            avg_latency = sum(latencies) / len(latencies)
+            
+            # Calculate jitter metrics if we have at least 2 measurements
+            if len(latencies) >= 2:
+                # Standard deviation
+                variance = sum((x - avg_latency) ** 2 for x in latencies) / len(latencies)
+                std_dev = math.sqrt(variance)
+                
+                # Mean deviation
+                mean_dev = sum(abs(x - avg_latency) for x in latencies) / len(latencies)
+                
+                # Min/Max range
+                min_max_range = max(latencies) - min(latencies)
+                
+                jitter_metrics = {
+                    'std_dev': std_dev,
+                    'mean_dev': mean_dev,
+                    'min_max_range': min_max_range
+                }
+            else:
+                # Not enough data for meaningful jitter
+                jitter_metrics = {
+                    'std_dev': None,
+                    'mean_dev': None,
+                    'min_max_range': None
+                }
+            
+            return (avg_latency, jitter_metrics, packet_loss_percent, "Success")
+        
+        # If ping command failed or returned no results
+        if result.returncode != 0:
+            if 'Name or service not known' in output or 'cannot resolve' in output.lower():
+                return (None, None, 100.0, "DNS Resolution Failed")
+            else:
+                return (None, None, 100.0, "Timeout/Unreachable")
+        
+        # No latencies found but command succeeded - unusual case
+        return (None, None, 100.0, "No Response")
+        
+    except subprocess.TimeoutExpired:
+        return (None, None, 100.0, "Timeout/Unreachable")
+    except FileNotFoundError:
+        return (None, None, 100.0, "Ping Command Not Found")
+    except Exception as e:
+        # Check error message for DNS-related issues
+        error_str = str(e).lower()
+        if 'cannot resolve' in error_str or 'unknown host' in error_str or 'name or service not known' in error_str:
+            return (None, None, 100.0, "DNS Resolution Failed")
+        return (None, None, 100.0, f"Error: {str(e)}")
 
 
 def calculate_score(
