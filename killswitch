@@ -1,0 +1,102 @@
+#!/bin/bash
+
+# --- CONFIGURATION ---
+# Default directory for VPN configuration files
+VPN_DIR="$HOME/git/stealthspanner/IPVanish/"
+# Define the credential file path (dot file in home directory)
+CREDS_FILE="$HOME/.vpn_creds"
+
+# Input handling
+VPN_INPUT=$1
+
+if [ -z "$VPN_INPUT" ]; then
+    echo "Usage: sudo ./vpn_killswitch.sh [filename.ovpn]"
+    echo "Files are searched for in: $VPN_DIR"
+    exit 1
+fi
+
+# Resolve the VPN_CONFIG path
+if [ -f "$VPN_INPUT" ]; then
+    # Use the path provided if it exists directly
+    VPN_CONFIG="$VPN_INPUT"
+elif [ -f "${VPN_DIR}${VPN_INPUT}" ]; then
+    # Use the file from the configured VPN_DIR
+    VPN_CONFIG="${VPN_DIR}${VPN_INPUT}"
+else
+    echo "Error: Could not find '$VPN_INPUT' in current directory or in $VPN_DIR"
+    exit 1
+fi
+
+# --- CREDENTIAL HANDLING ---
+if [ ! -f "$CREDS_FILE" ]; then
+    echo "VPN credentials not found. Let's set them up for future use."
+    read -p "Enter VPN Username: " vpn_user
+    read -sp "Enter VPN Password: " vpn_pass
+    echo ""
+    
+    echo "$vpn_user" > "$CREDS_FILE"
+    echo "$vpn_pass" >> "$CREDS_FILE"
+    
+    chmod 600 "$CREDS_FILE"
+    echo "Credentials saved securely to $CREDS_FILE"
+fi
+
+# 1. Extract the server address and port from the .ovpn file
+REMOTE_SERVER=$(grep '^remote ' "$VPN_CONFIG" | awk '{print $2}')
+REMOTE_PORT=$(grep '^remote ' "$VPN_CONFIG" | awk '{print $3}')
+
+# Fallback to default OpenVPN port if not found
+if [ -z "$REMOTE_PORT" ]; then REMOTE_PORT=443; fi
+
+echo "Configuring Universal Kill Switch for: $REMOTE_SERVER on port $REMOTE_PORT"
+echo "Using config file: $VPN_CONFIG"
+
+# 2. Reset UFW to a clean state
+sudo ufw --force reset
+
+# 3. Set strict default policies (The Kill Switch)
+sudo ufw default deny incoming
+sudo ufw default deny outgoing
+
+# 4. ALLOW LOCAL TRAFFIC (SSH, NFS, Local Subnet)
+sudo ufw allow in to 192.168.1.0/24
+sudo ufw allow out to 192.168.1.0/24
+
+# 5. ALLOW DNS & DHCP (Required to start the connection)
+sudo ufw allow out 53
+sudo ufw allow in 53
+sudo ufw allow out 67,68/udp
+sudo ufw allow in 67,68/udp
+
+# 6. Allow traffic through the virtual VPN tunnel (tun0)
+sudo ufw allow out on tun0 from any to any
+sudo ufw allow in on tun0 from any to any
+
+# 7. Allow the handshake to the IPVanish server
+sudo ufw allow out to any port "$REMOTE_PORT"
+
+# 8. Enable firewall
+sudo ufw enable
+
+# 9. Cleanup Function (Runs when you press Ctrl+C)
+function cleanup {
+    echo ""
+    echo "Stopping VPN and disabling Kill Switch..."
+    sudo ufw --force reset
+    sudo ufw default allow outgoing
+    sudo ufw default deny incoming
+    sudo ufw enable
+    echo "Internet restored to normal."
+    exit
+}
+
+trap cleanup SIGINT
+
+echo "--------------------------------------------------------"
+echo "Kill Switch ACTIVE. Local traffic (192.168.1.0/24) is OPEN."
+echo "Using credentials from: $CREDS_FILE"
+echo "Press Ctrl+C to stop VPN and restore normal internet."
+echo "--------------------------------------------------------"
+
+# 10. Start the VPN with automatic authentication
+sudo openvpn --mute-replay-warnings --config "$VPN_CONFIG" --auth-user-pass "$CREDS_FILE"
