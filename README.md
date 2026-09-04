@@ -16,32 +16,20 @@ A Python tool to test latency for VPN servers by reading OpenVPN configuration f
 
 ## Requirements
 
-- Python 3.6+
-- `ping3` library (>=4.0.0)
-- `requests` library (>=2.25.0) - for config downloader
+- `uv`
+- Python 3.14+
+- `openvpn` and `sudo` if you want to connect using `runVPN.py`
+- `ufw` if you want to use killswitch mode
 
 ## Installation
 
-### Option 1: Using the Setup Script (Recommended)
+Install project dependencies with `uv`:
 
 ```bash
-chmod +x setup.sh
-./setup.sh
-source venv/bin/activate  # If not already activated
+uv sync
 ```
 
-### Option 2: Manual Installation
-
-1. Create a virtual environment (recommended):
-```bash
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+If you want to run commands without activating a virtual environment manually, use `uv run` in the examples below.
 
 ## Configuration
 
@@ -73,7 +61,7 @@ You can enable/disable providers, change the default provider, or disable auto-d
 Test latency for all `.ovpn` files (configs are downloaded automatically by default):
 
 ```bash
-python3 stealthspanner.py
+uv run python stealthspanner.py
 ```
 
 ### Command-Line Options
@@ -92,27 +80,47 @@ python3 stealthspanner.py
 
 Test with 10 pings per server:
 ```bash
-python3 stealthspanner.py --pings 10
+uv run python stealthspanner.py --pings 10
+```
+
+Select the lowest-latency `.ovpn` file from `vpn_latency_checker.log`:
+```bash
+uv run python runVPN.py
+```
+
+Print only the resolved `.ovpn` path (useful for scripting):
+```bash
+uv run python runVPN.py --print-only
+```
+
+Run the selected VPN without killswitch:
+```bash
+uv run python runVPN.py -r
+```
+
+Run the selected VPN with killswitch enabled:
+```bash
+uv run python runVPN.py -r -k
 ```
 
 Skip downloading configs and use existing files:
 ```bash
-python3 stealthspanner.py --no-download
+uv run python stealthspanner.py --no-download
 ```
 
 Use a specific provider:
 ```bash
-python3 stealthspanner.py --provider ipvanish
+uv run python stealthspanner.py --provider ipvanish
 ```
 
 Use a custom directory:
 ```bash
-python3 stealthspanner.py --directory /path/to/ovpn/files
+uv run python stealthspanner.py --directory /path/to/ovpn/files
 ```
 
 Combine options:
 ```bash
-python3 stealthspanner.py --pings 5 --workers 30 --timeout 4.0 --no-download
+uv run python stealthspanner.py --pings 5 --workers 30 --timeout 4.0 --no-download
 ```
 
 ### VPN Provider Selection
@@ -168,6 +176,7 @@ Note: Colors are automatically disabled if output is redirected to a file or if 
 ```
 stealthspanner/
 ├── stealthspanner.py          # Main entry point
+├── runVPN.py                  # Picks the best .ovpn and can run it
 ├── config_manager.py          # Configuration file management
 ├── vpn_config_downloader.py   # VPN config downloader (multi-provider)
 ├── config.template.ini        # Configuration template
@@ -213,7 +222,7 @@ if provider_name_lower == 'newprovider':
 
 Make sure you've installed dependencies:
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ### "No valid .ovpn files found" Error
@@ -228,7 +237,7 @@ pip install -r requirements.txt
 If you need to reset your configuration:
 ```bash
 rm ~/.stealthspanner.ini
-# Run stealthspanner.py again to recreate from template
+# Run `uv run python stealthspanner.py` again to recreate from template
 ```
 
 ### DNS Resolution Failures
