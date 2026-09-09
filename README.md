@@ -7,7 +7,7 @@ A Python tool to test latency for VPN servers by reading OpenVPN configuration f
 - 🔍 **Automatic Discovery**: Automatically discovers all `.ovpn` files in a directory
 - ⚡ **Concurrent Testing**: Tests multiple servers simultaneously using thread pools
 - 📊 **Sorted Results**: Displays results sorted by latency (best to worst)
-- 🎨 **Colorized Output**: Beautiful terminal output with color-coded status
+- 🎨 **Modern TUI Output**: Rich panels, progress bars, tables, and color-coded status
 - 📝 **Logging**: Automatically saves results to a log file
 - 📈 **Progress Bar**: Real-time progress indication during testing
 - 🔄 **Auto-Download**: Automatically downloads latest VPN configurations (configurable)
@@ -18,7 +18,7 @@ A Python tool to test latency for VPN servers by reading OpenVPN configuration f
 
 - `uv`
 - Python 3.14+
-- `openvpn` and `sudo` if you want to connect using `runVPN.py`
+- `openvpn` and `sudo` if you want StealthSpanner to connect using the selected `.ovpn`
 - `ufw` if you want to use killswitch mode
 
 ## Installation
@@ -33,10 +33,15 @@ If you want to run commands without activating a virtual environment manually, u
 
 ## Configuration
 
-On first run, StealthSpanner will create a configuration file at `~/.stealthspanner.ini` from a template. You can edit this file to customize settings:
+On first run, StealthSpanner will create a configuration file at `~/.config/stealthspanner/config.ini` from a template. If a legacy config exists at `~/.stealthspanner.ini`, it will still be used with a warning until you migrate it.
 
 ### Configuration File Location
-- **User Config**: `~/.stealthspanner.ini` (created automatically on first run)
+- **User Config**: `~/.config/stealthspanner/config.ini`
+- **Legacy Config Fallback**: `~/.stealthspanner.ini`
+- **VPN Credentials**: `~/.config/stealthspanner/vpn_creds`
+- **Legacy Credentials Fallback**: `~/.vpn_creds`
+- **Scan Log**: `~/.local/state/stealthspanner/stealthspanner.log`
+- **Legacy Scan Log Fallback for older data**: `./vpn_latency_checker.log`
 - **Template**: `config.template.ini` (in project directory)
 
 ### Configuration Options
@@ -58,11 +63,18 @@ You can enable/disable providers, change the default provider, or disable auto-d
 
 ### Basic Usage
 
-Test latency for all `.ovpn` files (configs are downloaded automatically by default):
+Run StealthSpanner with no options to open the startup menu:
 
 ```bash
 uv run python stealthspanner.py
 ```
+
+The startup menu lets you:
+- run a new latency scan
+- view the last saved scan
+- open the VPN picker
+- select the best VPN from the saved scan
+- run the saved default VPN choice (or best latency if no default is saved)
 
 ### Command-Line Options
 
@@ -78,29 +90,78 @@ uv run python stealthspanner.py
 
 ### Examples
 
-Test with 10 pings per server:
+Run a new latency scan directly with 10 pings per server:
 ```bash
 uv run python stealthspanner.py --pings 10
 ```
 
-Select the lowest-latency `.ovpn` file from `vpn_latency_checker.log`:
+Show the results from the last saved latency scan:
 ```bash
-uv run python runVPN.py
+uv run python stealthspanner.py --last-scan
 ```
+
+Select the lowest-latency `.ovpn` file from the default latency log location:
+```bash
+uv run python stealthspanner.py --select-vpn
+```
+
+Open the interactive TUI VPN picker:
+```bash
+uv run python stealthspanner.py --pick-vpn
+```
+
+The picker lets you choose a VPN by:
+- best score
+- best latency
+- best packet loss
+- best privacy
+- country
+- city
+- region
+- saved favorites
+
+Picker navigation:
+- `↑` / `↓` arrow keys to move
+- `Enter` to select
+- `b` or `←` to go back
+- `q` to cancel
+- `j` / `k` also work for movement
+- large menus automatically scroll to fit the current terminal height
+- the selected row stays within the visible window as you move through long lists
+
+Location drill-down supports:
+- country → VPN
+- city → random profile from that city
+- region → country → VPN
 
 Print only the resolved `.ovpn` path (useful for scripting):
 ```bash
-uv run python runVPN.py --print-only
+uv run python stealthspanner.py --select-vpn --print-only
 ```
 
 Run the selected VPN without killswitch:
 ```bash
-uv run python runVPN.py -r
+uv run python stealthspanner.py --select-vpn -r
 ```
+
+By default, StealthSpanner keeps OpenVPN output concise and shows a success message once connected, along with your public IP and FQDN before and after the VPN comes up.
+
+Run using the saved default preference if one exists:
+```bash
+uv run python stealthspanner.py -r
+```
+
+If the saved default is a specific profile, that exact `.ovpn` is used.
+If the saved default is a country, city, or region, StealthSpanner chooses a random successful profile from that location when `-r` or `--run` is used.
 
 Run the selected VPN with killswitch enabled:
 ```bash
-uv run python runVPN.py -r -k
+uv run python stealthspanner.py --select-vpn -r -k
+```
+
+Show full OpenVPN / killswitch connection logs:
+```bash
+uv run python stealthspanner.py --select-vpn -r --verbose
 ```
 
 Skip downloading configs and use existing files:
@@ -123,6 +184,22 @@ Combine options:
 uv run python stealthspanner.py --pings 5 --workers 30 --timeout 4.0 --no-download
 ```
 
+### Picker Favorites and Defaults
+
+While using `--pick-vpn`, after selecting a VPN you can optionally:
+- save the individual VPN as a favorite
+- save its country as a favorite
+- save its city as a favorite
+- save its region as a favorite
+- set the individual VPN as the default
+- set its country as the default
+- set its city as the default
+- set its region as the default
+
+The TUI now supports back/forward-style drill-down navigation through picker menus, including browsing regions first and then narrowing to countries within that region.
+
+These preferences are stored in the `[PICKER]` section of `~/.config/stealthspanner/config.ini` or your legacy config if you are still using it.
+
 ### VPN Provider Selection
 
 StealthSpanner supports multiple VPN providers:
@@ -138,28 +215,50 @@ Currently, only IPVanish is fully implemented. Other providers can be added by i
 
 The tool provides:
 
-1. **Progress Bar**: Real-time progress during testing
-2. **Results Table**: Formatted table showing:
+1. **TUI Progress View**: Real-time progress during testing
+2. **Results Table**: Rich-formatted table showing:
    - Filename (`.ovpn` file name)
    - Hostname (server address)
-   - Latency (average in milliseconds)
-   - Status (Success/Failed/DNS Resolution Failed/Timeout)
+   - Country / privacy score
+   - Score, latency, jitter, packet loss, and status
 3. **Summary Statistics**:
    - Total servers tested
    - Successful tests
    - Failed tests (with breakdown by failure type)
+   - Best and worst score
    - Best and worst latency
+   - Best and worst jitter
+   - Best and worst packet loss
+   - Best and worst privacy
 
-4. **Log File**: Results are automatically saved to `stealthspanner.log`
+4. **Last Scan View**:
+   - shows when the last scan was run
+   - re-renders saved results from `stealthspanner.log`
 
-### Output Colors
+5. **Managed VPN Connection View**:
+   - concise connection messages by default
+   - full OpenVPN noise only with `-v` / `--verbose`
+   - Ctrl+C disconnects gracefully
+   - shows the public IP and FQDN before and after the VPN connects
+   - reminds the user to press Ctrl+C to disconnect
 
-- 🟢 **Green**: Successful pings with good latency (<100ms)
-- 🔵 **Bright Green**: Excellent latency (<50ms)
-- 🔴 **Red**: Failed pings or DNS errors
-- 🟡 **Yellow**: Warnings or timeout errors
+6. **Parseable Log File**: Results are automatically saved to:
+   - `~/.local/state/stealthspanner/stealthspanner.log`
+   - the saved log contains a machine-readable scan section with hostname, latency, score, packet loss, and status
+   - `--last-scan`, `--select-vpn`, and `--pick-vpn` read from this log
 
-Note: Colors are automatically disabled if output is redirected to a file or if `NO_COLOR` environment variable is set.
+### Output Style
+
+StealthSpanner now uses a modern terminal UI with:
+
+- panels for summaries, connection details, and saved paths
+- progress bars during testing
+- rich tables for latency and VPN selection results
+- an interactive TUI picker for score, latency, packet loss, privacy, country, favorites, and region→country drill-down
+- cleaner truncation for long filenames and paths
+- color-coded latency, score, status, and warnings
+
+If your terminal does not support color, the output still remains readable.
 
 ## How It Works
 
@@ -175,8 +274,7 @@ Note: Colors are automatically disabled if output is redirected to a file or if 
 
 ```
 stealthspanner/
-├── stealthspanner.py          # Main entry point
-├── runVPN.py                  # Picks the best .ovpn and can run it
+├── stealthspanner.py          # Main entry point for testing and optional VPN launch
 ├── config_manager.py          # Configuration file management
 ├── vpn_config_downloader.py   # VPN config downloader (multi-provider)
 ├── config.template.ini        # Configuration template
@@ -186,8 +284,10 @@ stealthspanner/
 ├── .gitignore                 # Git ignore rules
 ├── LICENSE                    # License file
 ├── IPVanish/                  # Directory containing IPVanish .ovpn files
-├── stealthspanner.log         # Log file (generated on run)
-└── ~/.stealthspanner.ini      # User configuration file (created on first run)
+└── ~/.config/stealthspanner/  # User config and credentials (created on first run)
+
+~/.local/state/stealthspanner/
+└── stealthspanner.log         # Runtime log file and last-scan source
 ```
 
 ## Adding New VPN Providers
@@ -236,7 +336,7 @@ uv sync
 
 If you need to reset your configuration:
 ```bash
-rm ~/.stealthspanner.ini
+rm ~/.config/stealthspanner/config.ini
 # Run `uv run python stealthspanner.py` again to recreate from template
 ```
 

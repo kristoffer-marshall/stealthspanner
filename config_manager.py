@@ -8,19 +8,20 @@ Handles loading and managing user configuration files.
 import configparser
 import os
 import shutil
+import sys
 from pathlib import Path
-from typing import Dict, Optional
+
+from xdg_paths import ensure_directory, get_config_dir, get_config_path, get_legacy_config_path
 
 
-def get_config_path() -> Path:
-    """
-    Get the path to the user's configuration file.
-    
-    Returns:
-        Path object pointing to ~/.stealthspanner.ini
-    """
-    home = Path.home()
-    return home / '.stealthspanner.ini'
+def warn_legacy_path(legacy_path: Path, new_path: Path, kind: str) -> None:
+    print(
+        f"Warning: Using legacy {kind} path at {legacy_path}. "
+        f"Please migrate to {new_path}.",
+        file=sys.stderr,
+    )
+
+
 
 
 def get_template_path() -> Path:
@@ -45,17 +46,30 @@ def create_config_from_template() -> None:
     """
     config_path = get_config_path()
     template_path = get_template_path()
-    
+
     if config_path.exists():
-        return  # Already exists
-    
+        return
+
     if not template_path.exists():
         raise FileNotFoundError(f"Template file not found: {template_path}")
-    
-    # Copy template to user's home directory
+
+    ensure_directory(get_config_dir())
     shutil.copy2(template_path, config_path)
-    # Set appropriate permissions (readable/writable by user only)
     os.chmod(config_path, 0o600)
+
+
+def get_active_config_path() -> Path:
+    config_path = get_config_path()
+    legacy_config_path = get_legacy_config_path()
+
+    if config_path.exists():
+        return config_path
+    if legacy_config_path.exists():
+        warn_legacy_path(legacy_config_path, config_path, "config")
+        return legacy_config_path
+
+    create_config_from_template()
+    return config_path
 
 
 def load_config() -> configparser.ConfigParser:
@@ -70,16 +84,11 @@ def load_config() -> configparser.ConfigParser:
         OSError: If config file cannot be created or read
         configparser.Error: If config file is invalid
     """
-    config_path = get_config_path()
-    
-    # Create config from template if it doesn't exist
-    if not config_path.exists():
-        create_config_from_template()
-    
-    # Load configuration
+    path_to_load = get_active_config_path()
+
     config = configparser.ConfigParser()
-    config.read(config_path)
-    
+    config.read(path_to_load)
+
     return config
 
 
@@ -109,7 +118,7 @@ def should_auto_download(config: configparser.ConfigParser) -> bool:
     return config.getboolean('DEFAULT', 'auto_download', fallback=True)
 
 
-def get_provider_config(config: configparser.ConfigParser, provider_name: str) -> Optional[Dict[str, str]]:
+def get_provider_config(config: configparser.ConfigParser, provider_name: str) -> dict[str, str] | None:
     """
     Get configuration for a specific VPN provider.
     
@@ -133,7 +142,7 @@ def get_provider_config(config: configparser.ConfigParser, provider_name: str) -
     return provider_config
 
 
-def get_config_directory(config: configparser.ConfigParser, provider_name: Optional[str] = None) -> str:
+def get_config_directory(config: configparser.ConfigParser, provider_name: str | None = None) -> str:
     """
     Get the directory path for VPN config files.
     
@@ -158,7 +167,7 @@ def get_config_directory(config: configparser.ConfigParser, provider_name: Optio
     return config.get('DEFAULT', 'config_directory', fallback='IPVanish')
 
 
-def get_default_privacy_scores() -> Dict[str, int]:
+def get_default_privacy_scores() -> dict[str, int]:
     """
     Return default privacy scores for common countries.
     
@@ -208,7 +217,56 @@ def get_privacy_weight(config: configparser.ConfigParser) -> float:
     return config.getfloat('PRIVACY', 'weight', fallback=0.35)
 
 
-def get_privacy_scores(config: configparser.ConfigParser) -> Dict[str, int]:
+def get_picker_preferences(config: configparser.ConfigParser) -> dict[str, str]:
+    if not config.has_section('PICKER'):
+        return {
+            'default_mode': '',
+            'default_value': '',
+            'favorite_profiles': '',
+            'favorite_countries': '',
+            'favorite_regions': '',
+            'favorite_cities': '',
+        }
+
+    return {
+        'default_mode': config.get('PICKER', 'default_mode', fallback='').strip(),
+        'default_value': config.get('PICKER', 'default_value', fallback='').strip(),
+        'favorite_profiles': config.get('PICKER', 'favorite_profiles', fallback='').strip(),
+        'favorite_countries': config.get('PICKER', 'favorite_countries', fallback='').strip(),
+        'favorite_regions': config.get('PICKER', 'favorite_regions', fallback='').strip(),
+        'favorite_cities': config.get('PICKER', 'favorite_cities', fallback='').strip(),
+    }
+
+
+def merge_csv_value(existing: str, new_value: str) -> str:
+    items = [item.strip() for item in existing.split(',') if item.strip()]
+    if new_value not in items:
+        items.append(new_value)
+    return ','.join(items)
+
+
+def update_picker_preferences(updates: dict[str, str], append_keys: set[str] | None = None) -> Path:
+    config_path = get_active_config_path()
+    config = configparser.ConfigParser()
+    config.read(config_path)
+
+    if not config.has_section('PICKER'):
+        config.add_section('PICKER')
+
+    append_keys = append_keys or set()
+    for key, value in updates.items():
+        if key in append_keys:
+            current_value = config.get('PICKER', key, fallback='').strip()
+            value = merge_csv_value(current_value, value)
+        config.set('PICKER', key, value)
+
+    with config_path.open('w', encoding='utf-8') as config_file:
+        config.write(config_file)
+    os.chmod(config_path, 0o600)
+    return config_path
+
+
+def get_privacy_scores(config: configparser.ConfigParser) -> dict[str, int]:
     """
     Get privacy scores for countries from configuration.
     

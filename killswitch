@@ -3,8 +3,10 @@
 # --- CONFIGURATION ---
 # Default directory for VPN configuration files
 VPN_DIR="$HOME/git/stealthspanner/IPVanish/"
-# Define the credential file path (dot file in home directory)
-CREDS_FILE="$HOME/.vpn_creds"
+# Preferred XDG-style credential location with legacy fallback
+XDG_CONFIG_HOME_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+CREDS_FILE="$XDG_CONFIG_HOME_DIR/stealthspanner/vpn_creds"
+LEGACY_CREDS_FILE="$HOME/.vpn_creds"
 
 # Input handling
 VPN_INPUT=$1
@@ -28,8 +30,14 @@ else
 fi
 
 # --- CREDENTIAL HANDLING ---
+if [ ! -f "$CREDS_FILE" ] && [ -f "$LEGACY_CREDS_FILE" ]; then
+    echo "Warning: Using legacy credentials path at $LEGACY_CREDS_FILE. Please migrate to $CREDS_FILE" >&2
+    CREDS_FILE="$LEGACY_CREDS_FILE"
+fi
+
 if [ ! -f "$CREDS_FILE" ]; then
     echo "VPN credentials not found. Let's set them up for future use."
+    mkdir -p "$(dirname "$CREDS_FILE")"
     read -p "Enter VPN Username: " vpn_user
     read -sp "Enter VPN Password: " vpn_pass
     echo ""
