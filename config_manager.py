@@ -8,20 +8,9 @@ Handles loading and managing user configuration files.
 import configparser
 import os
 import shutil
-import sys
 from pathlib import Path
 
-from xdg_paths import ensure_directory, get_config_dir, get_config_path, get_legacy_config_path
-
-
-def warn_legacy_path(legacy_path: Path, new_path: Path, kind: str) -> None:
-    print(
-        f"Warning: Using legacy {kind} path at {legacy_path}. "
-        f"Please migrate to {new_path}.",
-        file=sys.stderr,
-    )
-
-
+from xdg_paths import ensure_directory, get_config_dir, get_config_path
 
 
 def get_template_path() -> Path:
@@ -60,15 +49,8 @@ def create_config_from_template() -> None:
 
 def get_active_config_path() -> Path:
     config_path = get_config_path()
-    legacy_config_path = get_legacy_config_path()
-
-    if config_path.exists():
-        return config_path
-    if legacy_config_path.exists():
-        warn_legacy_path(legacy_config_path, config_path, "config")
-        return legacy_config_path
-
-    create_config_from_template()
+    if not config_path.exists():
+        create_config_from_template()
     return config_path
 
 

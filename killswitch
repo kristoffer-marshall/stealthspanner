@@ -1,5 +1,0 @@
-#!/bin/bash
-echo "Killswitch is built into StealthSpanner." >&2
-echo "Use: uv run python stealthspanner.py --select-vpn -r -k" >&2
-echo "Restore leftover UFW rules: uv run python stealthspanner.py --restore-firewall" >&2
-exit 1

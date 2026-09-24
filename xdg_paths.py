@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""XDG-style paths and migration helpers for StealthSpanner."""
+"""XDG-style paths for StealthSpanner."""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ import os
 from pathlib import Path
 
 APP_NAME = "stealthspanner"
-LEGACY_CONFIG_NAME = ".stealthspanner.ini"
-LEGACY_CREDS_NAME = ".vpn_creds"
 CONFIG_FILE_NAME = "config.ini"
 CREDS_FILE_NAME = "vpn_creds"
 STATE_LOG_FILE_NAME = "stealthspanner.log"
@@ -31,24 +29,12 @@ def get_state_dir() -> Path:
     return _expand_xdg_path("XDG_STATE_HOME", ".local/state") / APP_NAME
 
 
-def get_cache_dir() -> Path:
-    return _expand_xdg_path("XDG_CACHE_HOME", ".cache") / APP_NAME
-
-
 def get_config_path() -> Path:
     return get_config_dir() / CONFIG_FILE_NAME
 
 
-def get_legacy_config_path() -> Path:
-    return Path.home() / LEGACY_CONFIG_NAME
-
-
 def get_credentials_path() -> Path:
     return get_config_dir() / CREDS_FILE_NAME
-
-
-def get_legacy_credentials_path() -> Path:
-    return Path.home() / LEGACY_CREDS_NAME
 
 
 def get_state_log_path() -> Path:

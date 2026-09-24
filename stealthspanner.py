@@ -18,7 +18,6 @@ import socket
 import stat
 import subprocess
 import sys
-from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -50,7 +49,6 @@ from xdg_paths import (
     ensure_directory,
     get_credentials_path,
     get_last_scan_log_path,
-    get_legacy_credentials_path,
     get_state_log_path,
 )
 
@@ -335,72 +333,6 @@ def colorize(text: str, color: str, file=None) -> str:
     if supports_color(file):
         return f"{color}{text}{Colors.RESET}"
     return text
-
-
-def pad_and_colorize(text: str, width: int, color: str, file=None) -> str:
-    """
-    Pad text to specified width, then colorize it.
-    This ensures proper column alignment when colors are used.
-    
-    Args:
-        text: Text to pad and colorize
-        width: Desired display width
-        color: ANSI color code
-        file: File object to check color support (default: stdout)
-        
-    Returns:
-        Padded and colorized text
-    """
-    padded = f"{text:<{width}}"
-    return colorize(padded, color, file)
-
-
-class Tee:
-    """A file-like object that writes to multiple file handles (like Unix tee command)."""
-    
-    def __init__(self, *files):
-        self.files = files
-    
-    def write(self, data):
-        for f in self.files:
-            f.write(data)
-            f.flush()
-    
-    def flush(self):
-        for f in self.files:
-            f.flush()
-    
-    def close(self):
-        # Don't close stdout/stderr, only close log file
-        for f in self.files:
-            if f not in (sys.stdout, sys.stderr):
-                f.close()
-
-
-def print_progress_bar(completed: int, total: int, file=None, bar_length: int = 40) -> None:
-    """Legacy progress-bar fallback for non-Rich paths."""
-    if total == 0:
-        return
-
-    percent = (completed / total) * 100
-    filled_length = int(bar_length * completed // total)
-    filled_char = '█'
-    empty_char = '░'
-
-    if supports_color(file):
-        filled = colorize(filled_char * filled_length, Colors.BRIGHT_GREEN, file)
-        empty = colorize(empty_char * (bar_length - filled_length), Colors.GRAY, file)
-        bar = f"{filled}{empty}"
-        percent_text = colorize(f"{percent:.1f}%", Colors.BRIGHT_CYAN, file)
-        count_text = colorize(f"({completed}/{total})", Colors.WHITE, file)
-    else:
-        bar = filled_char * filled_length + empty_char * (bar_length - filled_length)
-        percent_text = f"{percent:.1f}%"
-        count_text = f"({completed}/{total})"
-
-    print(f'\r[{bar}] {percent_text} {count_text}', end='', flush=True, file=file)
-    if completed == total:
-        print(file=file)
 
 
 def print_banner(title: str, subtitle: str | None = None) -> None:
@@ -1228,12 +1160,10 @@ def parse_latency_log(log_path: Path) -> list[VPNSelectionResult]:
     results: list[VPNSelectionResult] = []
 
     in_machine_section = False
-    saw_machine_section = False
     for raw_line in lines:
         line = raw_line.rstrip("\n")
         if line.startswith("# stealthspanner_scan "):
             in_machine_section = True
-            saw_machine_section = True
             results = []
             continue
         if line.startswith("# end_stealthspanner_scan"):
@@ -1268,84 +1198,7 @@ def parse_latency_log(log_path: Path) -> list[VPNSelectionResult]:
             )
         )
 
-    if results or saw_machine_section:
-        return results
-
-    simple_pattern = re.compile(
-        r"^(?P<filename>.+?\.ovpn)\s+(?P<hostname>\S+)\s+(?P<latency>\d+(?:\.\d+)?)\s+(?P<status>.+?)\s*$"
-    )
-
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line or line.startswith(("=", "Filename", "Total", "Successful", "Failed", "Best ", "Worst ", "#")):
-            continue
-
-        match = simple_pattern.match(line)
-        if match:
-            results.append(
-                VPNSelectionResult(
-                    filename=match.group("filename"),
-                    hostname=match.group("hostname"),
-                    latency_ms=float(match.group("latency")),
-                    status=match.group("status").strip(),
-                )
-            )
-            continue
-
-        if ".ovpn" not in line:
-            continue
-
-        parts = line.split()
-        if len(parts) < 6:
-            continue
-
-        filename = parts[0]
-        if not filename.endswith('.ovpn'):
-            continue
-
-        try:
-            first_numeric_index = next(i for i, token in enumerate(parts[1:], start=1) if re.fullmatch(r"\d+(?:\.\d+)?", token))
-        except StopIteration:
-            continue
-
-        has_explicit_hostname = first_numeric_index >= 3
-        if has_explicit_hostname:
-            hostname = parts[1]
-            score_index = first_numeric_index
-        else:
-            host_stem = filename.removesuffix('.ovpn').split('-')[-2:]
-            hostname = "-".join(host_stem) + ".ipvanish.com" if len(host_stem) == 2 else filename.removesuffix('.ovpn') + ".ipvanish.com"
-            score_index = first_numeric_index
-
-        try:
-            latency_ms = float(parts[score_index + 1])
-        except (ValueError, IndexError):
-            continue
-
-        status_tokens = []
-        for token in reversed(parts):
-            if token.endswith('%'):
-                break
-            status_tokens.insert(0, token)
-        status = " ".join(status_tokens).strip() or "Success"
-
-        results.append(
-            VPNSelectionResult(
-                filename=filename,
-                hostname=hostname,
-                latency_ms=latency_ms,
-                status=status,
-            )
-        )
-
     return results
-
-
-def pick_best_result(results: Iterable[VPNSelectionResult]) -> VPNSelectionResult:
-    successful = [result for result in results if result.status.lower() == "success"]
-    if not successful:
-        raise ValueError("No successful VPN results were found in the latency log.")
-    return min(successful, key=lambda result: result.latency_ms)
 
 
 def resolve_ovpn_path(filename: str, vpn_dir: Path) -> Path:
@@ -1432,18 +1285,8 @@ def stream_process_until_ready(
 
 
 def ensure_credentials(creds_file: Path) -> Path:
-    legacy_creds_file = get_legacy_credentials_path()
-
     if creds_file.is_file():
         return creds_file
-
-    if legacy_creds_file.is_file() and creds_file != legacy_creds_file:
-        print(
-            f"Warning: Using legacy credentials path at {legacy_creds_file}. "
-            f"Please migrate to {creds_file}.",
-            file=sys.stderr,
-        )
-        return legacy_creds_file
 
     print(f"VPN credentials not found at {creds_file}.")
     print("Let's set them up for future use.")
@@ -1786,14 +1629,13 @@ def prompt_menu_choice(
     items: list[PickerMenuItem],
     breadcrumb: list[str],
     allow_back: bool = True,
-    allow_cancel_in_legacy: bool = True,
 ) -> str:
     if not items:
         return 'back'
 
     if readchar is None or not sys.stdin.isatty():
         options = [item.label for item in items]
-        selection = prompt_for_number_legacy(
+        selection = prompt_for_number(
             title,
             options,
             include_cancel=True,
@@ -1820,7 +1662,7 @@ def prompt_menu_choice(
             return 'back'
 
 
-def prompt_for_number_legacy(
+def prompt_for_number(
     title: str,
     options: list[str],
     include_cancel: bool = True,
@@ -1865,7 +1707,7 @@ def prompt_for_result_choice(title: str, results: list[PickerVPNResult], prefere
 
     if readchar is None or not sys.stdin.isatty():
         render_picker_results_table(title, results, preferences)
-        selection = prompt_for_number_legacy(title, [result.filename for result in results])
+        selection = prompt_for_number(title, [result.filename for result in results])
         if selection is None:
             return 'back'
         return results[selection]
@@ -2053,7 +1895,7 @@ def prompt_selected_vpn_actions(
         items = build_selected_vpn_items(result, preferences, killswitch)
         selected_index = min(selected_index, len(items) - 1)
         if readchar is None or not sys.stdin.isatty():
-            selection = prompt_for_number_legacy(
+            selection = prompt_for_number(
                 'Selected VPN',
                 [format_menu_item_label(item) for item in items],
                 cancel_label='Back',
@@ -2182,7 +2024,7 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
             PickerMenuItem('favorite_region', 'Favorite regions', f'{len(favorite_regions)} saved'),
             PickerMenuItem('favorite_city', 'Favorite cities', f'{len(favorite_cities)} saved'),
         ]
-        selected = prompt_menu_choice('Interactive VPN Picker', main_items, ['Picker'], allow_back=False, allow_cancel_in_legacy=True)
+        selected = prompt_menu_choice('Interactive VPN Picker', main_items, ['Picker'], allow_back=False)
         if selected in {'cancel', 'back'}:
             return None, False, False
 
@@ -2382,7 +2224,7 @@ def prompt_startup_menu() -> str:
         PickerMenuItem('run_default', 'Run VPN using saved default', 'Uses saved default preference when available'),
         PickerMenuItem('quit', 'Quit', 'Exit without doing anything'),
     ]
-    return prompt_menu_choice('StealthSpanner Menu', items, ['Home'], allow_back=False, allow_cancel_in_legacy=True)
+    return prompt_menu_choice('StealthSpanner Menu', items, ['Home'], allow_back=False)
 
 
 def maybe_select_and_run_vpn(args: argparse.Namespace, directory: Path, preferences: dict[str, str], privacy_config: dict) -> int | None:
@@ -2544,7 +2386,7 @@ def main():
     parser.add_argument(
         '--log',
         default=None,
-        help='Path to the latency log file (default: XDG state path, with legacy fallback)'
+        help='Path to the latency log file (default: XDG state path)'
     )
     parser.add_argument(
         '--top',

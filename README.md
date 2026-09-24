@@ -1,6 +1,6 @@
 # StealthSpanner
 
-A Python tool to test latency for VPN servers by reading OpenVPN configuration files and pinging each server concurrently. Supports multiple VPN providers with automatic configuration download.
+A Python tool to test latency for VPN servers by reading OpenVPN configuration files and pinging each server concurrently. Downloads IPVanish configurations automatically.
 
 ## Features
 
@@ -11,7 +11,7 @@ A Python tool to test latency for VPN servers by reading OpenVPN configuration f
 - 📝 **Logging**: Automatically saves results to a log file
 - 📈 **Progress Bar**: Real-time progress indication during testing
 - 🔄 **Auto-Download**: Automatically downloads latest VPN configurations (configurable)
-- 🎯 **Multi-Provider**: Supports multiple VPN providers (IPVanish, NordVPN, ProtonVPN, PIA)
+- 🎯 **VPN Configs**: Downloads IPVanish OpenVPN profiles; more providers can be added
 - ⚙️ **Configurable**: User configuration file for customizing behavior
 
 ## Requirements
@@ -33,16 +33,13 @@ If you want to run commands without activating a virtual environment manually, u
 
 ## Configuration
 
-On first run, StealthSpanner will create a configuration file at `~/.config/stealthspanner/config.ini` from a template. If a legacy config exists at `~/.stealthspanner.ini`, it will still be used with a warning until you migrate it.
+On first run, StealthSpanner creates `~/.config/stealthspanner/config.ini` from a template.
 
 ### Configuration File Location
 - **User Config**: `~/.config/stealthspanner/config.ini`
-- **Legacy Config Fallback**: `~/.stealthspanner.ini`
 - **VPN Credentials**: `~/.config/stealthspanner/vpn_creds`
-- **Legacy Credentials Fallback**: `~/.vpn_creds`
 - **Scan Log**: `~/.local/state/stealthspanner/stealthspanner.log`
 - **Killswitch marker**: `~/.local/state/stealthspanner/killswitch.active`
-- **Legacy Scan Log Fallback for older data**: `./vpn_latency_checker.log`
 - **Template**: `config.template.ini` (in project directory)
 
 ### Configuration Options
@@ -207,18 +204,11 @@ While using `--pick-vpn`, choosing a profile opens one screen:
 
 The TUI now supports back/forward-style drill-down navigation through picker menus, including browsing regions first and then narrowing to countries within that region.
 
-These preferences are stored in the `[PICKER]` section of `~/.config/stealthspanner/config.ini` or your legacy config if you are still using it.
+These preferences are stored in the `[PICKER]` section of `~/.config/stealthspanner/config.ini`.
 
 ### VPN Provider Selection
 
-StealthSpanner supports multiple VPN providers:
-
-- **IPVanish** (default, fully implemented)
-- **NordVPN** (placeholder - implementation needed)
-- **ProtonVPN** (placeholder - implementation needed)
-- **PIA** (Private Internet Access, placeholder - implementation needed)
-
-Currently, only IPVanish is fully implemented. Other providers can be added by implementing the download logic in `vpn_config_downloader.py`.
+StealthSpanner downloads IPVanish OpenVPN profiles. Other providers can be added by implementing the download logic in `vpn_config_downloader.py`.
 
 ## Output
 
@@ -285,11 +275,12 @@ If your terminal does not support color, the output still remains readable.
 ```
 stealthspanner/
 ├── stealthspanner.py          # Main entry point for testing and optional VPN launch
+├── killswitch.py              # In-process UFW killswitch
 ├── config_manager.py          # Configuration file management
-├── vpn_config_downloader.py   # VPN config downloader (multi-provider)
+├── vpn_config_downloader.py   # VPN config downloader
+├── xdg_paths.py               # XDG path helpers
 ├── config.template.ini        # Configuration template
-├── requirements.txt           # Python dependencies
-├── setup.sh                   # Setup script
+├── pyproject.toml             # Project metadata and dependencies
 ├── README.md                  # This file
 ├── .gitignore                 # Git ignore rules
 ├── LICENSE                    # License file
