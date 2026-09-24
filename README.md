@@ -74,7 +74,7 @@ The startup menu lets you:
 - run a new latency scan
 - view the last saved scan
 - open the VPN picker
-- run the saved default VPN choice (or best latency if no default is saved)
+- run the saved default VPN
 
 ### Command-Line Options
 
@@ -103,6 +103,8 @@ Show the results from the last saved latency scan:
 ```bash
 uv run python stealthspanner.py --last-scan
 ```
+
+In a terminal, last-scan results open in a pager. Arrow keys or `j`/`k` scroll, Page Up/Page Down or space page, Home/End jump, and `s` toggles the summary. From the startup menu, `b` or `←` returns to the main menu, and `q` quits. `--last-scan` quits with `q`. Piped output still prints the full table.
 
 Select the lowest-latency `.ovpn` file from the default latency log location:
 ```bash
@@ -243,7 +245,8 @@ The tool provides:
 
 4. **Last Scan View**:
    - shows when the last scan was run
-   - re-renders saved results from `stealthspanner.log`
+   - re-renders saved results from `stealthspanner.log` in a scrollable pager
+   - `b` or `←` returns to the main menu when opened from the startup menu
 
 5. **Managed VPN Connection View**:
    - concise connection messages by default

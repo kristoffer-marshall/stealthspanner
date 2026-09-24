@@ -503,24 +503,33 @@ def render_killswitch_firewall_panel(status: FirewallStatus, title: str = "Kills
     console.print(Panel(details, title=title, border_style=border, expand=False))
 
 
-def render_results_table(results: list[dict], output_console: Console = console) -> tuple[list[dict], list[dict]]:
+def split_scan_results(results: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
     successful = [r for r in results if r['latency'] is not None]
     failed = [r for r in results if r['latency'] is None]
     successful.sort(key=lambda x: x.get('score', 0.0), reverse=True)
     failed.sort(key=lambda x: x.get('score', 0.0), reverse=True)
-    sorted_results = successful + failed
+    return successful + failed, successful, failed
 
-    table = Table(title="VPN Latency Results", box=box.ROUNDED, header_style="bold bright_cyan")
+
+def render_results_table(
+    results: list[dict],
+    output_console: Console = console,
+    window: tuple[int, int] | None = None,
+) -> tuple[list[dict], list[dict]]:
+    sorted_results, successful, failed = split_scan_results(results)
+    visible_results = sorted_results if window is None else sorted_results[window[0]:window[1]]
+
+    table = Table(title="VPN Latency Results", box=box.ROUNDED, header_style="bold bright_cyan", expand=True)
     table.add_column("File", style="white", overflow="ellipsis", no_wrap=True, max_width=38)
     table.add_column("Host", style="cyan", overflow="ellipsis", no_wrap=True, max_width=26)
-    table.add_column("Country", style="magenta", overflow="ellipsis", max_width=20)
-    table.add_column("Score", justify="right", width=7)
-    table.add_column("Latency", justify="right", width=10)
-    table.add_column("Jitter", justify="right", width=18)
-    table.add_column("Loss", justify="right", width=8)
-    table.add_column("Status", justify="center", overflow="ellipsis", max_width=18)
+    table.add_column("Country", style="magenta", overflow="ellipsis", no_wrap=True, max_width=20)
+    table.add_column("Score", justify="right", overflow="ellipsis", no_wrap=True, width=7)
+    table.add_column("Latency", justify="right", overflow="ellipsis", no_wrap=True, width=10)
+    table.add_column("Jitter", justify="right", overflow="ellipsis", no_wrap=True, width=18)
+    table.add_column("Loss", justify="right", overflow="ellipsis", no_wrap=True, width=8)
+    table.add_column("Status", justify="center", overflow="ellipsis", no_wrap=True, max_width=18)
 
-    for result in sorted_results:
+    for result in visible_results:
         country_name = result.get('country_name', 'Unknown')
         privacy_score = result.get('privacy_score', 0)
         score = result.get('score', 0.0)
@@ -1123,25 +1132,91 @@ def build_last_scan_results(selection_results: list[VPNSelectionResult], privacy
     return results
 
 
-def show_last_scan(log_path: Path, privacy_config: dict) -> int:
+def show_last_scan(log_path: Path, privacy_config: dict, *, allow_menu: bool = False) -> str:
     if not log_path.is_file():
         print_error(f"Last scan log not found: {log_path}")
-        return 1
+        return 'error'
 
     selection_results = parse_latency_log(log_path)
     if not selection_results:
         print_error(f"No scan results found in {log_path}")
-        return 1
+        return 'error'
 
     metadata = LastScanMetadata(
         log_path=log_path,
         last_run=format_timestamp(log_path.stat().st_mtime),
     )
     results = build_last_scan_results(selection_results, privacy_config)
+    if readchar is not None and sys.stdin.isatty() and sys.stdout.isatty():
+        return page_last_scan_results(results, metadata, allow_menu=allow_menu)
+
     successful, failed = render_results_table(results)
     render_last_scan_panel(metadata)
     render_results_summary(results, successful, failed)
-    return 0
+    return 'quit'
+
+
+def page_last_scan_results(
+    results: list[dict],
+    metadata: LastScanMetadata,
+    *,
+    allow_menu: bool = False,
+) -> str:
+    """Scroll last-scan rows. Returns 'menu' to go back, or 'quit' to leave."""
+    if readchar is None:
+        raise RuntimeError("readchar is required to page last-scan results")
+
+    sorted_results, successful, failed = split_scan_results(results)
+    offset = 0
+    show_summary = False
+    menu_hint = " • b main menu" if allow_menu else ""
+    footer = f"↑/↓ j/k scroll • PgUp/PgDn page • Home/End jump • s summary{menu_hint} • q quit"
+    summary_footer = "s to return to results"
+    if allow_menu:
+        summary_footer += " • b main menu"
+    summary_footer += " • q to quit"
+
+    while True:
+        height = console.size.height or 24
+        visible_rows = max(5, height - 14)
+        visible_rows = min(visible_rows, len(sorted_results))
+        max_offset = max(0, len(sorted_results) - visible_rows)
+        offset = min(offset, max_offset)
+        end = min(len(sorted_results), offset + visible_rows)
+
+        console.clear()
+        render_last_scan_panel(metadata)
+        if show_summary:
+            render_results_summary(results, successful, failed)
+            console.print(f"[bright_black]{summary_footer}[/bright_black]")
+        else:
+            render_results_table(results, window=(offset, end))
+            console.print(
+                f"[bright_black]Showing {offset + 1}-{end} of {len(sorted_results)} "
+                f"• {len(successful)} successful • {len(failed)} failed[/bright_black]"
+            )
+            console.print(f"[bright_black]{footer}[/bright_black]")
+
+        key = readchar.readkey()
+        if key in (readchar.key.UP, 'k'):
+            offset -= 1
+        elif key in (readchar.key.DOWN, 'j'):
+            offset += 1
+        elif key in (readchar.key.PAGE_UP,):
+            offset -= visible_rows
+        elif key in (readchar.key.PAGE_DOWN, readchar.key.SPACE):
+            offset += visible_rows
+        elif key in (readchar.key.HOME, 'g'):
+            offset = 0
+        elif key in (readchar.key.END, 'G'):
+            offset = max_offset
+        elif key in ('s', 'S'):
+            show_summary = not show_summary
+        elif allow_menu and key in ('b', 'B', readchar.key.LEFT):
+            return 'menu'
+        elif key in ('q', 'Q'):
+            return 'quit'
+        offset = max(0, min(offset, max_offset))
 
 
 def parse_latency_log(log_path: Path) -> list[VPNSelectionResult]:
@@ -2119,9 +2194,9 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
 def prompt_startup_menu() -> str:
     items = [
         PickerMenuItem('scan', 'Run a new latency scan', 'Test all available VPN profiles'),
-        PickerMenuItem('last_scan', 'View last scan results', 'Show saved results and last run time'),
+        PickerMenuItem('last_scan', 'View last scan results', 'Scroll saved results and last run time'),
         PickerMenuItem('pick', 'Open VPN picker', 'Choose by score, latency, favorites, country, or region'),
-        PickerMenuItem('run_default', 'Run VPN using saved default or best latency', 'Uses saved default preference when available'),
+        PickerMenuItem('run_default', 'Run VPN using saved default', 'Uses saved default preference when available'),
         PickerMenuItem('quit', 'Quit', 'Exit without doing anything'),
     ]
     return prompt_menu_choice('StealthSpanner Menu', items, ['Home'], allow_back=False, allow_cancel_in_legacy=True)
@@ -2348,20 +2423,6 @@ def main():
     if leftover_status != 0:
         sys.exit(leftover_status)
 
-    if no_explicit_action:
-        menu_choice = prompt_startup_menu()
-        if menu_choice in {'cancel', 'quit'}:
-            console.print('[bright_black]Goodbye.[/bright_black]')
-            sys.exit(0)
-        if menu_choice == 'last_scan':
-            args.last_scan = True
-        elif menu_choice == 'pick':
-            args.pick_vpn = True
-        elif menu_choice == 'run_default':
-            args.run = True
-        elif menu_choice == 'scan':
-            pass
-    
     # Load configuration
     try:
         config = load_config()
@@ -2394,8 +2455,28 @@ def main():
     script_dir = Path(__file__).resolve().parent
     selected_log_path = (script_dir / args.log).resolve() if args.log and not Path(args.log).is_absolute() else Path(args.log) if args.log else get_last_scan_log_path()
 
+    if no_explicit_action:
+        while True:
+            menu_choice = prompt_startup_menu()
+            if menu_choice in {'cancel', 'quit'}:
+                console.print('[bright_black]Goodbye.[/bright_black]')
+                sys.exit(0)
+            if menu_choice == 'last_scan':
+                action = show_last_scan(selected_log_path, privacy_config, allow_menu=True)
+                if action == 'menu':
+                    continue
+                sys.exit(0 if action == 'quit' else 1)
+            if menu_choice == 'pick':
+                args.pick_vpn = True
+            elif menu_choice == 'run_default':
+                args.run = True
+            elif menu_choice == 'scan':
+                pass
+            break
+
     if args.last_scan:
-        sys.exit(show_last_scan(selected_log_path, privacy_config))
+        action = show_last_scan(selected_log_path, privacy_config)
+        sys.exit(0 if action == 'quit' else 1)
 
     selection_result = maybe_select_and_run_vpn(args, directory, picker_preferences, privacy_config)
     if selection_result is not None:
@@ -2500,5 +2581,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        console.print('\n[bright_black]Goodbye.[/bright_black]')
+        raise SystemExit(130) from None
 
