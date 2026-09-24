@@ -1787,13 +1787,12 @@ def format_menu_item_label(item: PickerMenuItem) -> str:
 def build_selected_vpn_items(
     result: PickerVPNResult,
     preferences: dict[str, str],
-    killswitch: bool,
+    killswitch: bool = False,
 ) -> list[PickerMenuItem]:
     favorite_profiles, favorite_countries, favorite_regions, favorite_cities, default_mode, default_value = get_preference_sets(preferences)
     connect_detail = 'Start this profile with killswitch' if killswitch else 'Start this profile'
     items = [
         PickerMenuItem('connect', 'Connect this VPN', connect_detail),
-        PickerMenuItem('killswitch', 'Killswitch', 'Toggle before connecting', checked=killswitch),
         PickerMenuItem(
             'profile_favorite',
             'Favorite this VPN',
@@ -1881,12 +1880,12 @@ def toggle_selected_vpn_preference(result: PickerVPNResult, preferences: dict[st
 def prompt_selected_vpn_actions(
     result: PickerVPNResult,
     preferences: dict[str, str],
-) -> tuple[bool, bool] | str:
+    killswitch: bool = False,
+) -> str:
     """Toggle favorites and defaults, then connect or go back.
 
-    Returns (connect, killswitch), 'back', or 'cancel'.
+    Returns 'connect', 'back', or 'cancel'.
     """
-    killswitch = False
     selected_index = 0
     footer = '↑/↓ move • Space toggles • Enter on Connect starts the VPN • b back • q cancel'
     breadcrumb = ['Picker', result.country_name, result.filename]
@@ -1902,10 +1901,7 @@ def prompt_selected_vpn_actions(
             )
             if selection is None:
                 return 'back'
-            action = apply_selected_vpn_menu_key(items[selection].key, result, preferences, killswitch)
-            if action == 'toggle-killswitch':
-                killswitch = not killswitch
-                continue
+            action = apply_selected_vpn_menu_key(items[selection].key, result, preferences)
             if action is None:
                 continue
             return action
@@ -1918,17 +1914,11 @@ def prompt_selected_vpn_actions(
         elif key in (readchar.key.DOWN, 'j'):
             selected_index = (selected_index + 1) % len(items)
         elif key == readchar.key.SPACE and item_key not in {'connect', 'back'}:
-            action = apply_selected_vpn_menu_key(item_key, result, preferences, killswitch)
-            if action == 'toggle-killswitch':
-                killswitch = not killswitch
+            apply_selected_vpn_menu_key(item_key, result, preferences)
         elif key in (readchar.key.ENTER, readchar.key.CR, readchar.key.LF):
-            if item_key == 'connect':
-                return True, killswitch
-            action = apply_selected_vpn_menu_key(item_key, result, preferences, killswitch)
-            if action == 'toggle-killswitch':
-                killswitch = not killswitch
-            elif action == 'back':
-                return 'back'
+            action = apply_selected_vpn_menu_key(item_key, result, preferences)
+            if action in {'connect', 'back'}:
+                return action
         elif key in ('q', 'Q'):
             return 'cancel'
         elif key in ('b', 'B', readchar.key.LEFT):
@@ -1939,14 +1929,11 @@ def apply_selected_vpn_menu_key(
     item_key: str,
     result: PickerVPNResult,
     preferences: dict[str, str],
-    killswitch: bool,
-) -> tuple[bool, bool] | str | None:
+) -> str | None:
     if item_key == 'connect':
-        return True, killswitch
+        return 'connect'
     if item_key == 'back':
         return 'back'
-    if item_key == 'killswitch':
-        return 'toggle-killswitch'
     if item_key.endswith('_favorite') or item_key.endswith('_default'):
         toggle_selected_vpn_preference(result, preferences, item_key)
     return None
@@ -2004,7 +1991,11 @@ def run_with_default_preference(results: list[PickerVPNResult], preferences: dic
     return matching[0]
 
 
-def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str, str]) -> tuple[PickerVPNResult | None, bool, bool]:
+def run_interactive_picker(
+    results: list[PickerVPNResult],
+    preferences: dict[str, str],
+    killswitch: bool = False,
+) -> tuple[PickerVPNResult | None, bool]:
     successful = [result for result in results if result.status.lower() == 'success' and result.latency_ms is not None]
     if not successful:
         raise ValueError('No successful VPN results were found in the last scan log.')
@@ -2026,7 +2017,7 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
         ]
         selected = prompt_menu_choice('Interactive VPN Picker', main_items, ['Picker'], allow_back=False)
         if selected in {'cancel', 'back'}:
-            return None, False, False
+            return None, False
 
         chosen: PickerVPNResult | None = None
 
@@ -2041,13 +2032,13 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
                 ]
                 country_choice = prompt_menu_choice('Choose a country', country_items, ['Picker', 'Countries'])
                 if country_choice == 'cancel':
-                    return None, False, False
+                    return None, False
                 if country_choice == 'back':
                     break
                 matches = [result for result in successful if result.country_name == country_choice]
                 vpn_choice = prompt_for_result_choice('Choose a VPN', matches, preferences, ['Picker', 'Countries', country_choice])
                 if vpn_choice is None:
-                    return None, False, False
+                    return None, False
                 if vpn_choice == 'back':
                     continue
                 if isinstance(vpn_choice, str):
@@ -2063,7 +2054,7 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
                 ]
                 city_choice = prompt_menu_choice('Choose a city', city_items, ['Picker', 'Cities'])
                 if city_choice == 'cancel':
-                    return None, False, False
+                    return None, False
                 if city_choice == 'back':
                     break
                 matches = [result for result in successful if result.city_name == city_choice]
@@ -2078,7 +2069,7 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
                 ]
                 region_choice = prompt_menu_choice('Choose a region', region_items, ['Picker', 'Regions'])
                 if region_choice == 'cancel':
-                    return None, False, False
+                    return None, False
                 if region_choice == 'back':
                     break
                 region_matches = [result for result in successful if result.region == region_choice]
@@ -2090,13 +2081,13 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
                     ]
                     country_choice = prompt_menu_choice('Choose a country in region', country_items, ['Picker', 'Regions', region_choice])
                     if country_choice == 'cancel':
-                        return None, False, False
+                        return None, False
                     if country_choice == 'back':
                         break
                     matches = [result for result in region_matches if result.country_name == country_choice]
                     vpn_choice = prompt_for_result_choice('Choose a VPN', matches, preferences, ['Picker', 'Regions', region_choice, country_choice])
                     if vpn_choice is None:
-                        return None, False, False
+                        return None, False
                     if vpn_choice == 'back':
                         continue
                     if isinstance(vpn_choice, str):
@@ -2112,7 +2103,7 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
                 continue
             vpn_choice = prompt_for_result_choice('Choose a favorite profile', matches, preferences, ['Picker', 'Favorite profiles'])
             if vpn_choice is None:
-                return None, False, False
+                return None, False
             if vpn_choice == 'back':
                 continue
             if isinstance(vpn_choice, str):
@@ -2131,13 +2122,13 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
                 ]
                 country_choice = prompt_menu_choice('Choose a favorite country', country_items, ['Picker', 'Favorite countries'])
                 if country_choice == 'cancel':
-                    return None, False, False
+                    return None, False
                 if country_choice == 'back':
                     break
                 grouped_matches = [result for result in matches if result.country_name == country_choice]
                 vpn_choice = prompt_for_result_choice('Choose a VPN', grouped_matches, preferences, ['Picker', 'Favorite countries', country_choice])
                 if vpn_choice is None:
-                    return None, False, False
+                    return None, False
                 if vpn_choice == 'back':
                     continue
                 if isinstance(vpn_choice, str):
@@ -2157,7 +2148,7 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
                 ]
                 region_choice = prompt_menu_choice('Choose a favorite region', region_items, ['Picker', 'Favorite regions'])
                 if region_choice == 'cancel':
-                    return None, False, False
+                    return None, False
                 if region_choice == 'back':
                     break
                 region_matches = [result for result in matches if result.region == region_choice]
@@ -2169,13 +2160,13 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
                     ]
                     country_choice = prompt_menu_choice('Choose a country in favorite region', country_items, ['Picker', 'Favorite regions', region_choice])
                     if country_choice == 'cancel':
-                        return None, False, False
+                        return None, False
                     if country_choice == 'back':
                         break
                     grouped_matches = [result for result in region_matches if result.country_name == country_choice]
                     vpn_choice = prompt_for_result_choice('Choose a VPN', grouped_matches, preferences, ['Picker', 'Favorite regions', region_choice, country_choice])
                     if vpn_choice is None:
-                        return None, False, False
+                        return None, False
                     if vpn_choice == 'back':
                         continue
                     if isinstance(vpn_choice, str):
@@ -2197,7 +2188,7 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
                 ]
                 city_choice = prompt_menu_choice('Choose a favorite city', city_items, ['Picker', 'Favorite cities'])
                 if city_choice == 'cancel':
-                    return None, False, False
+                    return None, False
                 if city_choice == 'back':
                     break
                 grouped_matches = [result for result in matches if result.city_name == city_choice]
@@ -2207,27 +2198,78 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
         if chosen is None:
             continue
 
-        outcome = prompt_selected_vpn_actions(chosen, preferences)
+        outcome = prompt_selected_vpn_actions(chosen, preferences, killswitch)
         if outcome == 'cancel':
-            return None, False, False
+            return None, False
         if outcome == 'back':
             continue
-        should_run, use_killswitch = outcome
-        return chosen, should_run, use_killswitch
+        return chosen, True
 
 
-def prompt_startup_menu() -> str:
-    items = [
-        PickerMenuItem('run_default', 'Run VPN using saved default', 'Uses saved default preference when available'),
-        PickerMenuItem('scan', 'Run a new latency scan', 'Test all available VPN profiles'),
-        PickerMenuItem('last_scan', 'View last scan results', 'Scroll saved results and last run time'),
-        PickerMenuItem('pick', 'Open VPN picker', 'Choose by score, latency, favorites, country, or region'),
-        PickerMenuItem('quit', 'Quit', 'Exit without doing anything'),
-    ]
-    return prompt_menu_choice('StealthSpanner Menu', items, ['Home'], allow_back=False)
+def prompt_startup_menu(killswitch: bool = False) -> tuple[str, bool]:
+    """Main menu. Killswitch is a session toggle for the next connection.
+
+    Returns (choice, killswitch). Space or Enter flips the toggle and stays on the menu.
+    """
+    selected_index = 0
+    footer = '↑/↓ move • Space toggles killswitch • Enter selects • q quit'
+
+    while True:
+        items = [
+            PickerMenuItem('run_default', 'Run VPN using saved default', 'Uses saved default preference when available'),
+            PickerMenuItem('scan', 'Run a new latency scan', 'Test all available VPN profiles'),
+            PickerMenuItem('last_scan', 'View last scan results', 'Scroll saved results and last run time'),
+            PickerMenuItem('pick', 'Open VPN picker', 'Choose by score, latency, favorites, country, or region'),
+            PickerMenuItem(
+                'killswitch',
+                'Killswitch',
+                'Apply UFW killswitch when connecting',
+                checked=killswitch,
+            ),
+            PickerMenuItem('quit', 'Quit', 'Exit without doing anything'),
+        ]
+        selected_index = min(selected_index, len(items) - 1)
+        if readchar is None or not sys.stdin.isatty():
+            selection = prompt_for_number(
+                'StealthSpanner Menu',
+                [format_menu_item_label(item) for item in items],
+                cancel_label='Quit',
+            )
+            if selection is None:
+                return 'quit', killswitch
+            if items[selection].key == 'killswitch':
+                killswitch = not killswitch
+                continue
+            return items[selection].key, killswitch
+
+        render_menu_table('StealthSpanner Menu', items, selected_index, ['Home'], footer)
+        key = readchar.readkey()
+        item_key = items[selected_index].key
+        if key in (readchar.key.UP, 'k'):
+            selected_index = (selected_index - 1) % len(items)
+        elif key in (readchar.key.DOWN, 'j'):
+            selected_index = (selected_index + 1) % len(items)
+        elif key == readchar.key.SPACE and item_key == 'killswitch':
+            killswitch = not killswitch
+        elif key in (readchar.key.ENTER, readchar.key.CR, readchar.key.LF):
+            if item_key == 'killswitch':
+                killswitch = not killswitch
+            else:
+                return item_key, killswitch
+        elif key in ('q', 'Q'):
+            return 'quit', killswitch
 
 
-def maybe_select_and_run_vpn(args: argparse.Namespace, directory: Path, preferences: dict[str, str], privacy_config: dict) -> int | None:
+def maybe_select_and_run_vpn(
+    args: argparse.Namespace,
+    directory: Path,
+    preferences: dict[str, str],
+    privacy_config: dict,
+    session_killswitch: bool | None = None,
+) -> int | None:
+    if session_killswitch is not None and args.run and not args.pick_vpn:
+        args.killswitch = session_killswitch
+
     if args.killswitch and not args.run:
         print("Error: --killswitch can only be used with --run.", file=sys.stderr)
         return 1
@@ -2256,12 +2298,14 @@ def maybe_select_and_run_vpn(args: argparse.Namespace, directory: Path, preferen
             key=lambda result: result.latency_ms or float('inf'),
         )
         if args.pick_vpn:
-            chosen, picker_run_now, picker_use_killswitch = run_interactive_picker(successful, preferences)
+            use_killswitch = args.killswitch if session_killswitch is None else session_killswitch
+            chosen, picker_run_now = run_interactive_picker(successful, preferences, killswitch=use_killswitch)
             if chosen is None:
                 return 0
             if picker_run_now:
                 args.run = True
-                args.killswitch = picker_use_killswitch
+                if session_killswitch is not None:
+                    args.killswitch = session_killswitch
             else:
                 render_selection_summary(
                     VPNSelectionResult(chosen.filename, chosen.hostname, chosen.latency_ms or 0.0, chosen.status),
@@ -2480,9 +2524,12 @@ def main():
     script_dir = Path(__file__).resolve().parent
     selected_log_path = (script_dir / args.log).resolve() if args.log and not Path(args.log).is_absolute() else Path(args.log) if args.log else get_last_scan_log_path()
 
+    session_killswitch: bool | None = None
     if no_explicit_action:
+        session_killswitch = args.killswitch
+        args.killswitch = False
         while True:
-            menu_choice = prompt_startup_menu()
+            menu_choice, session_killswitch = prompt_startup_menu(session_killswitch)
             if menu_choice in {'cancel', 'quit'}:
                 console.print('[bright_black]Goodbye.[/bright_black]')
                 sys.exit(0)
@@ -2503,7 +2550,13 @@ def main():
         action = show_last_scan(selected_log_path, privacy_config)
         sys.exit(0 if action == 'quit' else 1)
 
-    selection_result = maybe_select_and_run_vpn(args, directory, picker_preferences, privacy_config)
+    selection_result = maybe_select_and_run_vpn(
+        args,
+        directory,
+        picker_preferences,
+        privacy_config,
+        session_killswitch=session_killswitch,
+    )
     if selection_result is not None:
         sys.exit(selection_result)
 

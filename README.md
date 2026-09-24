@@ -72,6 +72,9 @@ The startup menu lets you:
 - run a new latency scan
 - view the last saved scan
 - open the VPN picker
+- toggle killswitch for the next connection
+
+Killswitch is off by default. Highlight **Killswitch** and press Space or Enter to flip `[ ]` / `[x]`. The choice stays on for this menu session, including after you return from the last-scan view, and applies when you run the saved default or connect from the VPN picker.
 
 ### Command-Line Options
 
@@ -196,8 +199,7 @@ uv run python stealthspanner.py --pings 5 --workers 30 --timeout 4.0 --no-downlo
 ### Picker Favorites and Defaults
 
 While using `--pick-vpn`, choosing a profile opens one screen:
-- **Connect this VPN** starts that profile
-- **Killswitch** is a toggle used only when you connect
+- **Connect this VPN** starts that profile. If killswitch was turned on from the startup menu, or with `-k` together with `-r`, the connect row says the session will use killswitch
 - favorite and default rows are toggles; `[x]` is on and `[ ]` is off. Press Space or Enter to flip them
 - only one default is stored, so turning a default on replaces the previous one
 - **Back** returns to the picker without connecting
