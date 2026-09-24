@@ -8,6 +8,7 @@ with automatic configuration download.
 """
 
 import argparse
+import atexit
 import getpass
 import math
 import os
@@ -36,6 +37,15 @@ from rich.text import Text
 
 import requests
 
+from killswitch import (
+    FirewallStatus,
+    KillswitchError,
+    apply_killswitch,
+    clear_killswitch_marker,
+    firewall_status,
+    marker_exists,
+    restore_firewall,
+)
 from xdg_paths import (
     ensure_directory,
     get_credentials_path,
@@ -59,8 +69,8 @@ from config_manager import (
 from vpn_config_downloader import download_vpn_configs
 
 
-KILLSWITCH_DEFAULT = "killswitch"
 CREDS_FILE_DEFAULT = str(get_credentials_path())
+_KILLSWITCH_ATEXIT_REGISTERED = False
 console = Console()
 error_console = Console(stderr=True)
 log_console = Console(color_system=None, force_terminal=False, width=160)
@@ -451,7 +461,13 @@ def render_selection_summary(best: VPNSelectionResult, ovpn_path: Path, mode: st
     output_console.print(Panel(summary, title="Selected VPN", border_style="bright_green", expand=False))
 
 
-def render_connection_panel(mode: str, ovpn_path: Path, creds_file: Path | None = None, killswitch_path: Path | None = None, output_console: Console = console) -> None:
+def render_connection_panel(
+    mode: str,
+    ovpn_path: Path,
+    creds_file: Path | None = None,
+    killswitch_status: FirewallStatus | None = None,
+    output_console: Console = console,
+) -> None:
     details = Table.grid(padding=(0, 2))
     details.add_column(style="bold bright_cyan", justify="right")
     details.add_column(style="white", overflow="fold")
@@ -459,9 +475,32 @@ def render_connection_panel(mode: str, ovpn_path: Path, creds_file: Path | None 
     details.add_row("Config", str(ovpn_path))
     if creds_file is not None:
         details.add_row("Credentials", str(creds_file))
-    if killswitch_path is not None:
-        details.add_row("Killswitch", str(killswitch_path))
+    if killswitch_status is not None:
+        details.add_row("Killswitch firewall", format_killswitch_state(killswitch_status))
+        details.add_row("Default outgoing", killswitch_status.default_outgoing)
+        details.add_row("Session marker", "present" if killswitch_status.marker_present else "absent")
     output_console.print(Panel(details, title="Connection", border_style="bright_magenta", expand=False))
+
+
+def format_killswitch_state(status: FirewallStatus) -> str:
+    if status.is_killswitch_active:
+        return "ACTIVE"
+    if status.ufw_active:
+        return "inactive (ufw on)"
+    return "inactive"
+
+
+def render_killswitch_firewall_panel(status: FirewallStatus, title: str = "Killswitch firewall") -> None:
+    details = Table.grid(padding=(0, 2))
+    details.add_column(style="bold bright_cyan", justify="right")
+    details.add_column(style="white", overflow="fold")
+    details.add_row("State", format_killswitch_state(status))
+    details.add_row("UFW", "active" if status.ufw_active else "inactive")
+    details.add_row("Default outgoing", status.default_outgoing)
+    details.add_row("tun0 allow", "yes" if status.tun0_allowed else "no")
+    details.add_row("Session marker", "present" if status.marker_present else "absent")
+    border = "bright_red" if status.is_killswitch_active else "bright_blue"
+    console.print(Panel(details, title=title, border_style=border, expand=False))
 
 
 def render_results_table(results: list[dict], output_console: Console = console) -> tuple[list[dict], list[dict]]:
@@ -1342,9 +1381,109 @@ def ensure_credentials(creds_file: Path) -> Path:
     return creds_file
 
 
-def run_openvpn(ovpn_path: Path, creds_file: Path, verbose: bool = False) -> int:
+def _atexit_restore_killswitch() -> None:
+    try:
+        restore_firewall(verbose=False)
+    except KillswitchError:
+        pass
+
+
+def register_killswitch_atexit() -> None:
+    global _KILLSWITCH_ATEXIT_REGISTERED
+    if not _KILLSWITCH_ATEXIT_REGISTERED:
+        atexit.register(_atexit_restore_killswitch)
+        _KILLSWITCH_ATEXIT_REGISTERED = True
+
+
+def unregister_killswitch_atexit() -> None:
+    global _KILLSWITCH_ATEXIT_REGISTERED
+    if _KILLSWITCH_ATEXIT_REGISTERED:
+        atexit.unregister(_atexit_restore_killswitch)
+        _KILLSWITCH_ATEXIT_REGISTERED = False
+
+
+def restore_killswitch_session(*, verbose: bool = False, label: str = "Killswitch firewall restored.") -> bool:
+    try:
+        restore_firewall(verbose=verbose)
+    except KillswitchError as exc:
+        print_error(f"Failed to restore firewall: {exc}")
+        return False
+
+    unregister_killswitch_atexit()
+    print_success(label)
+    try:
+        render_killswitch_firewall_panel(firewall_status(verbose=False))
+    except KillswitchError as exc:
+        print_warning(f"Could not read firewall status after restore: {exc}")
+    return True
+
+
+def recover_leftover_killswitch(*, verbose: bool = False, query_ufw: bool = True) -> int:
+    noninteractive = False
+    if not query_ufw and not marker_exists():
+        # Old bash leftovers have no marker. Probe with sudo -n so a scan is not
+        # blocked, and do not prompt for a password on every launch.
+        noninteractive = True
+
+    try:
+        status = firewall_status(verbose=verbose, noninteractive=noninteractive)
+    except KillswitchError as exc:
+        if noninteractive:
+            return 0
+        print_warning(f"Could not read UFW status: {exc}")
+        return 0
+
+    if not status.is_killswitch_active:
+        if marker_exists():
+            print_warning("Killswitch session marker was present without active UFW rules; clearing marker.")
+            try:
+                clear_killswitch_marker()
+            except KillswitchError as exc:
+                print_warning(str(exc))
+        return 0
+
+    print_warning("Leftover killswitch firewall rules detected (likely from an interrupted session).")
+    render_killswitch_firewall_panel(status, title="Leftover killswitch")
+    if restore_killswitch_session(
+        verbose=verbose,
+        label="Leftover killswitch firewall rules were removed.",
+    ):
+        return 0
+    return 1
+
+
+def handle_restore_firewall(*, verbose: bool = False) -> int:
+    try:
+        status = firewall_status(verbose=verbose)
+    except KillswitchError as exc:
+        print_error(str(exc))
+        return 1
+
+    render_killswitch_firewall_panel(status)
+    if not status.is_killswitch_active:
+        if marker_exists():
+            print_warning("Killswitch session marker was present without active UFW rules; clearing marker.")
+            try:
+                clear_killswitch_marker()
+            except KillswitchError as exc:
+                print_warning(str(exc))
+        print_info("Killswitch firewall is not active; no restore needed.")
+        return 0
+    return 0 if restore_killswitch_session(verbose=verbose) else 1
+
+
+def run_openvpn(
+    ovpn_path: Path,
+    creds_file: Path,
+    verbose: bool = False,
+    success_message: str = "VPN connected successfully.",
+    disconnect_hint: str = "Press Ctrl+C to disconnect and return to your normal connection.",
+    before_identity: NetworkIdentity | None = None,
+    capture_before_identity: bool = True,
+) -> int:
     creds_path = ensure_credentials(creds_file)
-    before_identity = get_public_network_identity()
+    if capture_before_identity:
+        before_identity = get_public_network_identity()
 
     process = subprocess.Popen(
         [
@@ -1377,50 +1516,45 @@ def run_openvpn(ovpn_path: Path, creds_file: Path, verbose: bool = False) -> int
             return process.wait()
 
         after_identity = get_public_network_identity()
-        print_success('VPN connected successfully.')
+        print_success(success_message)
         render_network_identity_panel(before_identity, after_identity)
-        print_info('Press Ctrl+C to disconnect and return to your normal connection.')
+        print_info(disconnect_hint)
 
         return process.wait()
     except KeyboardInterrupt:
         return terminate_process_gracefully(process, 'OpenVPN')
 
 
-def run_with_killswitch(ovpn_path: Path, killswitch_path: Path, verbose: bool = False) -> int:
-    if not killswitch_path.is_file():
-        raise FileNotFoundError(f"killswitch script not found: {killswitch_path}")
-
+def run_with_killswitch(ovpn_path: Path, creds_file: Path, verbose: bool = False) -> int:
+    applied = False
     before_identity = get_public_network_identity()
-    process = subprocess.Popen(
-        ['bash', str(killswitch_path), str(ovpn_path)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-
     try:
-        connected, buffered_lines = stream_process_until_ready(
-            process,
+        host, port = apply_killswitch(ovpn_path, verbose=verbose)
+        applied = True
+        register_killswitch_atexit()
+        print_success(f"Killswitch enabled for {host} on port {port}.")
+        try:
+            render_killswitch_firewall_panel(firewall_status(verbose=False))
+        except KillswitchError as exc:
+            print_warning(f"Could not read firewall status: {exc}")
+        return run_openvpn(
+            ovpn_path,
+            creds_file,
             verbose=verbose,
-            ready_pattern='Initialization Sequence Completed',
-            failure_patterns=['AUTH_FAILED', 'Exiting due to fatal error', 'SIGTERM'],
+            success_message="VPN connected with killswitch enabled.",
+            disconnect_hint="Press Ctrl+C to disconnect the VPN and restore normal internet access.",
+            before_identity=before_identity,
+            capture_before_identity=False,
         )
-
-        if not connected:
-            if not verbose:
-                for line in buffered_lines[-20:]:
-                    console.print(line)
-            return process.wait()
-
-        after_identity = get_public_network_identity()
-        print_success('VPN connected with killswitch enabled.')
-        render_network_identity_panel(before_identity, after_identity)
-        print_info('Press Ctrl+C to disconnect the VPN and restore normal internet access.')
-
-        return process.wait()
+    except KillswitchError as exc:
+        print_error(str(exc))
+        return 1
     except KeyboardInterrupt:
-        return terminate_process_gracefully(process, 'Killswitch VPN')
+        print_warning("Killswitch setup interrupted.")
+        return 130
+    finally:
+        if applied:
+            restore_killswitch_session(verbose=verbose)
 
 
 def parse_csv_list(value: str) -> list[str]:
@@ -2013,11 +2147,6 @@ def maybe_select_and_run_vpn(args: argparse.Namespace, directory: Path, preferen
         log_path = get_last_scan_log_path()
 
     vpn_dir = directory.resolve()
-    killswitch_path = (
-        (script_dir / args.killswitch_script).resolve()
-        if not Path(args.killswitch_script).is_absolute()
-        else Path(args.killswitch_script)
-    )
     creds_file = Path(args.creds_file).expanduser()
 
     try:
@@ -2079,15 +2208,25 @@ def maybe_select_and_run_vpn(args: argparse.Namespace, directory: Path, preferen
     if not args.run:
         return 0
 
+    leftover_status = recover_leftover_killswitch(verbose=args.verbose, query_ufw=True)
+    if leftover_status != 0:
+        return leftover_status
+
     print()
     if args.killswitch:
-        render_connection_panel("OpenVPN + killswitch", ovpn_path, killswitch_path=killswitch_path)
-        print_info(f"Launching killswitch with: {ovpn_path}")
         try:
-            return run_with_killswitch(ovpn_path, killswitch_path, verbose=args.verbose)
-        except FileNotFoundError as exc:
-            print_error(str(exc))
-            return 1
+            ks_status = firewall_status(verbose=False)
+        except KillswitchError as exc:
+            print_warning(f"Could not read firewall status: {exc}")
+            ks_status = None
+        render_connection_panel(
+            "OpenVPN + killswitch",
+            ovpn_path,
+            creds_file=creds_file,
+            killswitch_status=ks_status,
+        )
+        print_info(f"Launching OpenVPN with killswitch: {ovpn_path}")
+        return run_with_killswitch(ovpn_path, creds_file, verbose=args.verbose)
 
     render_connection_panel("OpenVPN", ovpn_path, creds_file=creds_file)
     print_info(f"Launching OpenVPN with: {ovpn_path}")
@@ -2169,12 +2308,12 @@ def main():
     parser.add_argument(
         '-k', '--killswitch',
         action='store_true',
-        help='Enable killswitch mode when running the selected VPN (off by default)'
+        help='Enable in-process UFW killswitch when running the selected VPN (off by default)'
     )
     parser.add_argument(
-        '--killswitch-script',
-        default=KILLSWITCH_DEFAULT,
-        help=f'Path to the killswitch script (default: {KILLSWITCH_DEFAULT})'
+        '--restore-firewall',
+        action='store_true',
+        help='Restore leftover killswitch UFW rules without connecting a VPN'
     )
     parser.add_argument(
         '--creds-file',
@@ -2189,7 +2328,7 @@ def main():
     parser.add_argument(
         '-v', '--verbose',
         action='store_true',
-        help='Show verbose VPN connection output instead of concise status messages'
+        help='Show verbose VPN connection and UFW killswitch output'
     )
     
     args = parser.parse_args()
@@ -2200,7 +2339,15 @@ def main():
         args.pick_vpn,
         args.run,
         args.print_only,
+        args.restore_firewall,
     ])
+
+    if args.restore_firewall:
+        sys.exit(handle_restore_firewall(verbose=args.verbose))
+
+    leftover_status = recover_leftover_killswitch(verbose=args.verbose, query_ufw=False)
+    if leftover_status != 0:
+        sys.exit(leftover_status)
 
     if no_explicit_action:
         menu_choice = prompt_startup_menu()

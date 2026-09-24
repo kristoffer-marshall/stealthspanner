@@ -41,6 +41,7 @@ On first run, StealthSpanner will create a configuration file at `~/.config/stea
 - **VPN Credentials**: `~/.config/stealthspanner/vpn_creds`
 - **Legacy Credentials Fallback**: `~/.vpn_creds`
 - **Scan Log**: `~/.local/state/stealthspanner/stealthspanner.log`
+- **Killswitch marker**: `~/.local/state/stealthspanner/killswitch.active`
 - **Legacy Scan Log Fallback for older data**: `./vpn_latency_checker.log`
 - **Template**: `config.template.ini` (in project directory)
 
@@ -79,13 +80,17 @@ The startup menu lets you:
 ### Command-Line Options
 
 ```
--h, --help          Show help message and exit
--p, --pings N       Number of ping attempts per host (default: 4)
--w, --workers N     Number of concurrent threads (default: 20)
--t, --timeout N     Ping timeout in seconds (default: 3.0)
--d, --directory DIR Directory containing .ovpn files (overrides config)
---no-download       Skip downloading VPN config files
---provider PROVIDER VPN provider to use (overrides config file)
+-h, --help            Show help message and exit
+-p, --pings N         Number of ping attempts per host (default: 4)
+-w, --workers N       Number of concurrent threads (default: 20)
+-t, --timeout N       Ping timeout in seconds (default: 3.0)
+-d, --directory DIR   Directory containing .ovpn files (overrides config)
+--no-download         Skip downloading VPN config files
+--provider PROVIDER   VPN provider to use (overrides config file)
+-r, --run             Run the selected VPN configuration
+-k, --killswitch      Enable in-process UFW killswitch for that OpenVPN session (opt-in)
+--restore-firewall    Restore leftover killswitch UFW rules without connecting
+-v, --verbose         Show verbose VPN / UFW output
 ```
 
 ### Examples
@@ -157,6 +162,12 @@ If the saved default is a country, city, or region, StealthSpanner chooses a ran
 Run the selected VPN with killswitch enabled:
 ```bash
 uv run python stealthspanner.py --select-vpn -r -k
+```
+
+`-k` applies UFW killswitch rules for that OpenVPN session only, shows whether the killswitch firewall is active, and restores normal outgoing access when the VPN exits (including Ctrl+C). If a previous session was killed abruptly, the next run detects leftover rules and restores them. You can also restore without connecting:
+
+```bash
+uv run python stealthspanner.py --restore-firewall
 ```
 
 Show full OpenVPN / killswitch connection logs:

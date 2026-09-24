@@ -12,6 +12,7 @@ LEGACY_CREDS_NAME = ".vpn_creds"
 CONFIG_FILE_NAME = "config.ini"
 CREDS_FILE_NAME = "vpn_creds"
 STATE_LOG_FILE_NAME = "stealthspanner.log"
+KILLSWITCH_MARKER_FILE_NAME = "killswitch.active"
 
 
 
@@ -56,6 +57,10 @@ def get_state_log_path() -> Path:
 
 def get_last_scan_log_path() -> Path:
     return get_state_log_path()
+
+
+def get_killswitch_marker_path() -> Path:
+    return get_state_dir() / KILLSWITCH_MARKER_FILE_NAME
 
 
 def ensure_directory(path: Path) -> Path:
