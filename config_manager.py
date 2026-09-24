@@ -245,7 +245,16 @@ def merge_csv_value(existing: str, new_value: str) -> str:
     return ','.join(items)
 
 
-def update_picker_preferences(updates: dict[str, str], append_keys: set[str] | None = None) -> Path:
+def remove_csv_value(existing: str, old_value: str) -> str:
+    items = [item.strip() for item in existing.split(',') if item.strip() and item.strip() != old_value]
+    return ','.join(items)
+
+
+def update_picker_preferences(
+    updates: dict[str, str],
+    append_keys: set[str] | None = None,
+    remove_keys: set[str] | None = None,
+) -> Path:
     config_path = get_active_config_path()
     config = configparser.ConfigParser()
     config.read(config_path)
@@ -254,10 +263,13 @@ def update_picker_preferences(updates: dict[str, str], append_keys: set[str] | N
         config.add_section('PICKER')
 
     append_keys = append_keys or set()
+    remove_keys = remove_keys or set()
     for key, value in updates.items():
+        current_value = config.get('PICKER', key, fallback='').strip()
         if key in append_keys:
-            current_value = config.get('PICKER', key, fallback='').strip()
             value = merge_csv_value(current_value, value)
+        elif key in remove_keys:
+            value = remove_csv_value(current_value, value)
         config.set('PICKER', key, value)
 
     with config_path.open('w', encoding='utf-8') as config_file:

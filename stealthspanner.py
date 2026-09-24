@@ -117,6 +117,7 @@ class PickerMenuItem:
     label: str
     description: str = ""
     value: str | None = None
+    checked: bool | None = None
 
 
 # Country code to country name mapping
@@ -1757,6 +1758,9 @@ def render_menu_table(
 
     table = Table(box=box.ROUNDED, header_style="bold bright_cyan")
     table.add_column("Sel", width=3, justify="center")
+    show_toggles = any(item.checked is not None for item in items)
+    if show_toggles:
+        table.add_column("", width=5, justify="center")
     table.add_column("Option", style="white", overflow="fold")
     table.add_column("Details", style="bright_black", overflow="fold")
 
@@ -1765,7 +1769,11 @@ def render_menu_table(
         item = items[index]
         marker = "➜" if index == selected_index else " "
         style = "bold bright_green" if index == selected_index else ""
-        table.add_row(marker, item.label, item.description, style=style)
+        cells = [marker]
+        if show_toggles:
+            cells.append(format_toggle_indicator(item.checked))
+        cells.extend((item.label, item.description))
+        table.add_row(*cells, style=style)
 
     console.print(table)
     if len(items) > (end - start):
@@ -1884,48 +1892,222 @@ def prompt_for_result_choice(title: str, results: list[PickerVPNResult], prefere
 def save_picker_preference(result: PickerVPNResult, target: str) -> None:
     if target == 'profile_favorite':
         update_picker_preferences({'favorite_profiles': result.filename}, append_keys={'favorite_profiles'})
-        print_success(f"Saved favorite profile: {result.filename}")
     elif target == 'country_favorite' and result.country_code:
         update_picker_preferences({'favorite_countries': result.country_code}, append_keys={'favorite_countries'})
-        print_success(f"Saved favorite country: {result.country_name}")
     elif target == 'region_favorite':
         update_picker_preferences({'favorite_regions': result.region}, append_keys={'favorite_regions'})
-        print_success(f"Saved favorite region: {result.region}")
     elif target == 'city_favorite':
         update_picker_preferences({'favorite_cities': result.city_name}, append_keys={'favorite_cities'})
-        print_success(f"Saved favorite city: {result.city_name}")
     elif target == 'profile_default':
         update_picker_preferences({'default_mode': 'profile', 'default_value': result.filename})
-        print_success(f"Saved default profile: {result.filename}")
     elif target == 'country_default' and result.country_code:
         update_picker_preferences({'default_mode': 'country', 'default_value': result.country_code})
-        print_success(f"Saved default country: {result.country_name}")
     elif target == 'region_default':
         update_picker_preferences({'default_mode': 'region', 'default_value': result.region})
-        print_success(f"Saved default region: {result.region}")
     elif target == 'city_default':
         update_picker_preferences({'default_mode': 'city', 'default_value': result.city_name})
-        print_success(f"Saved default city: {result.city_name}")
 
 
-def prompt_picker_actions(result: PickerVPNResult) -> None:
+def clear_picker_preference(result: PickerVPNResult, target: str) -> None:
+    if target == 'profile_favorite':
+        update_picker_preferences({'favorite_profiles': result.filename}, remove_keys={'favorite_profiles'})
+    elif target == 'country_favorite' and result.country_code:
+        update_picker_preferences({'favorite_countries': result.country_code}, remove_keys={'favorite_countries'})
+    elif target == 'region_favorite':
+        update_picker_preferences({'favorite_regions': result.region}, remove_keys={'favorite_regions'})
+    elif target == 'city_favorite':
+        update_picker_preferences({'favorite_cities': result.city_name}, remove_keys={'favorite_cities'})
+    elif target in {'profile_default', 'country_default', 'region_default', 'city_default'}:
+        update_picker_preferences({'default_mode': '', 'default_value': ''})
+
+
+def refresh_picker_preferences(preferences: dict[str, str]) -> None:
+    preferences.clear()
+    preferences.update(get_picker_preferences(load_config()))
+
+
+def format_toggle_indicator(checked: bool | None) -> str | Text:
+    """Terminal checklist mark: [x] on, [ ] off, blank for actions."""
+    if checked is None:
+        return ""
+    if checked:
+        return Text("[x]", style="bright_green")
+    return Text("[ ]", style="bright_black")
+
+
+def format_menu_item_label(item: PickerMenuItem) -> str:
+    if item.checked is None:
+        return item.label
+    mark = "[x]" if item.checked else "[ ]"
+    return f"{mark} {item.label}"
+
+
+def build_selected_vpn_items(
+    result: PickerVPNResult,
+    preferences: dict[str, str],
+    killswitch: bool,
+) -> list[PickerMenuItem]:
+    favorite_profiles, favorite_countries, favorite_regions, favorite_cities, default_mode, default_value = get_preference_sets(preferences)
+    connect_detail = 'Start this profile with killswitch' if killswitch else 'Start this profile'
     items = [
-        PickerMenuItem('profile_favorite', 'Make this VPN a favorite'),
-        PickerMenuItem('country_favorite', "Make this VPN's country a favorite", result.country_name),
-        PickerMenuItem('region_favorite', "Make this VPN's region a favorite", result.region),
-        PickerMenuItem('city_favorite', "Make this VPN's city a favorite", result.city_name),
-        PickerMenuItem('profile_default', 'Set this VPN as default'),
-        PickerMenuItem('country_default', "Set this VPN's country as default", result.country_name),
-        PickerMenuItem('region_default', "Set this VPN's region as default", result.region),
-        PickerMenuItem('city_default', "Set this VPN's city as default", result.city_name),
-        PickerMenuItem('done', 'Done'),
+        PickerMenuItem('connect', 'Connect this VPN', connect_detail),
+        PickerMenuItem('killswitch', 'Killswitch', 'Toggle before connecting', checked=killswitch),
+        PickerMenuItem(
+            'profile_favorite',
+            'Favorite this VPN',
+            result.filename,
+            checked=result.filename in favorite_profiles,
+        ),
     ]
+    if result.country_code:
+        items.append(PickerMenuItem(
+            'country_favorite',
+            'Favorite country',
+            result.country_name,
+            checked=result.country_code in favorite_countries,
+        ))
+    items.append(PickerMenuItem(
+        'region_favorite',
+        'Favorite region',
+        result.region,
+        checked=result.region in favorite_regions,
+    ))
+    items.append(PickerMenuItem(
+        'city_favorite',
+        'Favorite city',
+        result.city_name,
+        checked=result.city_name in favorite_cities,
+    ))
+    items.append(PickerMenuItem(
+        'profile_default',
+        'Default VPN',
+        'Only one default is saved',
+        checked=default_mode == 'profile' and default_value == result.filename,
+    ))
+    if result.country_code:
+        items.append(PickerMenuItem(
+            'country_default',
+            'Default country',
+            result.country_name,
+            checked=default_mode == 'country' and default_value == result.country_code,
+        ))
+    items.append(PickerMenuItem(
+        'region_default',
+        'Default region',
+        result.region,
+        checked=default_mode == 'region' and default_value == result.region,
+    ))
+    items.append(PickerMenuItem(
+        'city_default',
+        'Default city',
+        result.city_name,
+        checked=default_mode == 'city' and default_value == result.city_name,
+    ))
+    items.append(PickerMenuItem('back', 'Back', 'Return without connecting'))
+    return items
+
+
+def preference_is_enabled(result: PickerVPNResult, preferences: dict[str, str], target: str) -> bool:
+    favorite_profiles, favorite_countries, favorite_regions, favorite_cities, default_mode, default_value = get_preference_sets(preferences)
+    if target == 'profile_favorite':
+        return result.filename in favorite_profiles
+    if target == 'country_favorite':
+        return (result.country_code or '') in favorite_countries
+    if target == 'region_favorite':
+        return result.region in favorite_regions
+    if target == 'city_favorite':
+        return result.city_name in favorite_cities
+    if target == 'profile_default':
+        return default_mode == 'profile' and default_value == result.filename
+    if target == 'country_default':
+        return default_mode == 'country' and default_value == (result.country_code or '')
+    if target == 'region_default':
+        return default_mode == 'region' and default_value == result.region
+    if target == 'city_default':
+        return default_mode == 'city' and default_value == result.city_name
+    return False
+
+
+def toggle_selected_vpn_preference(result: PickerVPNResult, preferences: dict[str, str], target: str) -> None:
+    if preference_is_enabled(result, preferences, target):
+        clear_picker_preference(result, target)
+    else:
+        save_picker_preference(result, target)
+    refresh_picker_preferences(preferences)
+
+
+def prompt_selected_vpn_actions(
+    result: PickerVPNResult,
+    preferences: dict[str, str],
+) -> tuple[bool, bool] | str:
+    """Toggle favorites and defaults, then connect or go back.
+
+    Returns (connect, killswitch), 'back', or 'cancel'.
+    """
+    killswitch = False
+    selected_index = 0
+    footer = '↑/↓ move • Space toggles • Enter on Connect starts the VPN • b back • q cancel'
+    breadcrumb = ['Picker', result.country_name, result.filename]
 
     while True:
-        selected = prompt_menu_choice('Favorite / Default actions', items, ['Picker', result.country_name, result.filename], allow_back=True)
-        if selected in {'cancel', 'back', 'done'}:
-            return
-        save_picker_preference(result, selected)
+        items = build_selected_vpn_items(result, preferences, killswitch)
+        selected_index = min(selected_index, len(items) - 1)
+        if readchar is None or not sys.stdin.isatty():
+            selection = prompt_for_number_legacy(
+                'Selected VPN',
+                [format_menu_item_label(item) for item in items],
+                cancel_label='Back',
+            )
+            if selection is None:
+                return 'back'
+            action = apply_selected_vpn_menu_key(items[selection].key, result, preferences, killswitch)
+            if action == 'toggle-killswitch':
+                killswitch = not killswitch
+                continue
+            if action is None:
+                continue
+            return action
+
+        render_menu_table('Selected VPN', items, selected_index, breadcrumb, footer)
+        key = readchar.readkey()
+        item_key = items[selected_index].key
+        if key in (readchar.key.UP, 'k'):
+            selected_index = (selected_index - 1) % len(items)
+        elif key in (readchar.key.DOWN, 'j'):
+            selected_index = (selected_index + 1) % len(items)
+        elif key == readchar.key.SPACE and item_key not in {'connect', 'back'}:
+            action = apply_selected_vpn_menu_key(item_key, result, preferences, killswitch)
+            if action == 'toggle-killswitch':
+                killswitch = not killswitch
+        elif key in (readchar.key.ENTER, readchar.key.CR, readchar.key.LF):
+            if item_key == 'connect':
+                return True, killswitch
+            action = apply_selected_vpn_menu_key(item_key, result, preferences, killswitch)
+            if action == 'toggle-killswitch':
+                killswitch = not killswitch
+            elif action == 'back':
+                return 'back'
+        elif key in ('q', 'Q'):
+            return 'cancel'
+        elif key in ('b', 'B', readchar.key.LEFT):
+            return 'back'
+
+
+def apply_selected_vpn_menu_key(
+    item_key: str,
+    result: PickerVPNResult,
+    preferences: dict[str, str],
+    killswitch: bool,
+) -> tuple[bool, bool] | str | None:
+    if item_key == 'connect':
+        return True, killswitch
+    if item_key == 'back':
+        return 'back'
+    if item_key == 'killswitch':
+        return 'toggle-killswitch'
+    if item_key.endswith('_favorite') or item_key.endswith('_default'):
+        toggle_selected_vpn_preference(result, preferences, item_key)
+    return None
 
 
 def choose_random_result(results: list[PickerVPNResult]) -> PickerVPNResult:
@@ -1981,12 +2163,12 @@ def run_with_default_preference(results: list[PickerVPNResult], preferences: dic
 
 
 def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str, str]) -> tuple[PickerVPNResult | None, bool, bool]:
-    favorite_profiles, favorite_countries, favorite_regions, favorite_cities, _default_mode, _default_value = get_preference_sets(preferences)
     successful = [result for result in results if result.status.lower() == 'success' and result.latency_ms is not None]
     if not successful:
         raise ValueError('No successful VPN results were found in the last scan log.')
 
     while True:
+        favorite_profiles, favorite_countries, favorite_regions, favorite_cities, _default_mode, _default_value = get_preference_sets(preferences)
         main_items = [
             PickerMenuItem('best_score', 'Best score', 'Highest combined score'),
             PickerMenuItem('best_latency', 'Best latency', 'Lowest latency'),
@@ -2183,11 +2365,12 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
         if chosen is None:
             continue
 
-        console.clear()
-        console.print(Panel(format_picker_choice(chosen), title='Picker Selection', border_style='bright_green', expand=False))
-        prompt_picker_actions(chosen)
-        should_run = prompt_yes_no('Run this VPN now?', default=False)
-        use_killswitch = prompt_yes_no('Enable killswitch?', default=False) if should_run else False
+        outcome = prompt_selected_vpn_actions(chosen, preferences)
+        if outcome == 'cancel':
+            return None, False, False
+        if outcome == 'back':
+            continue
+        should_run, use_killswitch = outcome
         return chosen, should_run, use_killswitch
 
 

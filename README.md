@@ -198,15 +198,12 @@ uv run python stealthspanner.py --pings 5 --workers 30 --timeout 4.0 --no-downlo
 
 ### Picker Favorites and Defaults
 
-While using `--pick-vpn`, after selecting a VPN you can optionally:
-- save the individual VPN as a favorite
-- save its country as a favorite
-- save its city as a favorite
-- save its region as a favorite
-- set the individual VPN as the default
-- set its country as the default
-- set its city as the default
-- set its region as the default
+While using `--pick-vpn`, choosing a profile opens one screen:
+- **Connect this VPN** starts that profile
+- **Killswitch** is a toggle used only when you connect
+- favorite and default rows are toggles; `[x]` is on and `[ ]` is off. Press Space or Enter to flip them
+- only one default is stored, so turning a default on replaces the previous one
+- **Back** returns to the picker without connecting
 
 The TUI now supports back/forward-style drill-down navigation through picker menus, including browsing regions first and then narrowing to countries within that region.
 
