@@ -1612,7 +1612,7 @@ def render_menu_table(
         item = items[index]
         marker = "➜" if index == selected_index else " "
         style = "bold bright_green" if index == selected_index else ""
-        cells = [marker]
+        cells: list[str | Text] = [marker]
         if show_toggles:
             cells.append(format_toggle_indicator(item.checked))
         cells.extend((item.label, item.description))
@@ -2526,10 +2526,10 @@ def main():
 
     session_killswitch: bool | None = None
     if no_explicit_action:
-        session_killswitch = args.killswitch
+        menu_killswitch = args.killswitch
         args.killswitch = False
         while True:
-            menu_choice, session_killswitch = prompt_startup_menu(session_killswitch)
+            menu_choice, menu_killswitch = prompt_startup_menu(menu_killswitch)
             if menu_choice in {'cancel', 'quit'}:
                 console.print('[bright_black]Goodbye.[/bright_black]')
                 sys.exit(0)
@@ -2544,6 +2544,7 @@ def main():
                 args.run = True
             elif menu_choice == 'scan':
                 pass
+            session_killswitch = menu_killswitch
             break
 
     if args.last_scan:

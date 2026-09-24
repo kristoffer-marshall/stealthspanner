@@ -9,3 +9,8 @@ dependencies = [
     "requests>=2.34.2",
     "rich>=13.9.4",
 ]
+
+[tool.basedpyright]
+venvPath = "."
+venv = ".venv"
+extraPaths = [".venv/lib/python3.14/site-packages"]
