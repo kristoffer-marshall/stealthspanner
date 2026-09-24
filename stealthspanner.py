@@ -2121,7 +2121,6 @@ def prompt_startup_menu() -> str:
         PickerMenuItem('scan', 'Run a new latency scan', 'Test all available VPN profiles'),
         PickerMenuItem('last_scan', 'View last scan results', 'Show saved results and last run time'),
         PickerMenuItem('pick', 'Open VPN picker', 'Choose by score, latency, favorites, country, or region'),
-        PickerMenuItem('select', 'Select best VPN from saved scan', 'Display the lowest-latency saved result'),
         PickerMenuItem('run_default', 'Run VPN using saved default or best latency', 'Uses saved default preference when available'),
         PickerMenuItem('quit', 'Quit', 'Exit without doing anything'),
     ]
@@ -2358,8 +2357,6 @@ def main():
             args.last_scan = True
         elif menu_choice == 'pick':
             args.pick_vpn = True
-        elif menu_choice == 'select':
-            args.select_vpn = True
         elif menu_choice == 'run_default':
             args.run = True
         elif menu_choice == 'scan':

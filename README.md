@@ -74,7 +74,6 @@ The startup menu lets you:
 - run a new latency scan
 - view the last saved scan
 - open the VPN picker
-- select the best VPN from the saved scan
 - run the saved default VPN choice (or best latency if no default is saved)
 
 ### Command-Line Options
