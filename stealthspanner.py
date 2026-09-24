@@ -2218,10 +2218,10 @@ def run_interactive_picker(results: list[PickerVPNResult], preferences: dict[str
 
 def prompt_startup_menu() -> str:
     items = [
+        PickerMenuItem('run_default', 'Run VPN using saved default', 'Uses saved default preference when available'),
         PickerMenuItem('scan', 'Run a new latency scan', 'Test all available VPN profiles'),
         PickerMenuItem('last_scan', 'View last scan results', 'Scroll saved results and last run time'),
         PickerMenuItem('pick', 'Open VPN picker', 'Choose by score, latency, favorites, country, or region'),
-        PickerMenuItem('run_default', 'Run VPN using saved default', 'Uses saved default preference when available'),
         PickerMenuItem('quit', 'Quit', 'Exit without doing anything'),
     ]
     return prompt_menu_choice('StealthSpanner Menu', items, ['Home'], allow_back=False)

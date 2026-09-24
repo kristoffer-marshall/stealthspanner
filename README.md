@@ -68,10 +68,10 @@ uv run python stealthspanner.py
 ```
 
 The startup menu lets you:
+- run the saved default VPN
 - run a new latency scan
 - view the last saved scan
 - open the VPN picker
-- run the saved default VPN
 
 ### Command-Line Options
 
